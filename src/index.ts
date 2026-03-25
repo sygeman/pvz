@@ -32,15 +32,12 @@ setInterval(() => cleanupEmptyRooms(rooms), 60 * 60 * 1000);
 
 const app = new Elysia()
   .use(cors())
-  .use(staticPlugin({
-    assets: './client/dist',
-    prefix: '/'
-  }))
   
   // Error handler
-  .onError(({ code, error }) => {
+  .onError(({ code, error, set }) => {
     console.error(`Error ${code}:`, error);
     if (code === 'VALIDATION') {
+      set.status = 400;
       return { error: 'Invalid input', details: error.message };
     }
     return { error: 'Internal server error' };
@@ -53,7 +50,7 @@ const app = new Elysia()
     uptime: process.uptime()
   }))
   
-  // SSE endpoint
+  // SSE endpoint - MUST be before static plugin
   .get('/api/room/:roomId/events', ({ params: { roomId }, set, request }) => {
     try {
       const validRoomId = validateRoomId(roomId);
@@ -66,9 +63,10 @@ const app = new Elysia()
         room.totalDamageDealt = 0;
       }
       
-      set.headers['Content-Type'] = 'text/event-stream';
-      set.headers['Cache-Control'] = 'no-cache';
-      set.headers['Connection'] = 'keep-alive';
+      set.headers['content-type'] = 'text/event-stream';
+      set.headers['cache-control'] = 'no-cache';
+      set.headers['connection'] = 'keep-alive';
+      set.headers['x-accel-buffering'] = 'no'; // Disable nginx buffering if behind proxy
       
       const { readable, writable } = new TransformStream<Uint8Array>();
       const writer = writable.getWriter();
@@ -339,6 +337,12 @@ const app = new Elysia()
       return { error: 'Failed to get stats' };
     }
   })
+  
+  // Static files - MUST be after API routes
+  .use(staticPlugin({
+    assets: './client/dist',
+    prefix: '/'
+  }))
   
   .listen(process.env.PORT || 3000);
 

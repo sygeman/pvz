@@ -1,102 +1,158 @@
-// Multiplayer Client for Кладовочник
-const socket = io();
-
+// SSE Multiplayer Client for Vercel
 let gameState = {
-  roomId: null,
+  roomId: 'default',
   playerId: null,
   playerName: null,
   market: [],
   players: {},
   cityPvz: 12,
   month: 1,
-  messages: []
+  messages: [],
+  connected: false
 };
 
-// Join room on load
-function joinRoom() {
+let eventSource = null;
+const API_BASE = '/api';
+
+function init() {
   const urlParams = new URLSearchParams(window.location.search);
-  const roomId = urlParams.get('room') || 'default';
-  const playerName = urlParams.get('name') || 'Игрок' + Math.floor(Math.random() * 1000);
+  gameState.roomId = urlParams.get('room') || 'default';
+  gameState.playerName = urlParams.get('name') || 'Игрок' + Math.floor(Math.random() * 1000);
   
-  gameState.roomId = roomId;
-  gameState.playerName = playerName;
+  document.getElementById('room-info').textContent = `Комната: ${gameState.roomId}`;
+  document.getElementById('player-name').textContent = gameState.playerName;
   
-  socket.emit('join-room', { roomId, playerName });
-  
-  document.getElementById('room-info').textContent = `Комната: ${roomId}`;
-  document.getElementById('player-name').textContent = playerName;
+  connectSSE();
 }
 
-// Socket event handlers
-socket.on('room-joined', (data) => {
-  gameState.playerId = data.playerId;
-  gameState.market = data.market;
-  gameState.players = data.players;
-  gameState.cityPvz = data.cityPvz;
-  gameState.month = data.month;
-  gameState.messages = data.messages;
+function connectSSE() {
+  const url = `${API_BASE}/events?room=${gameState.roomId}`;
+  eventSource = new EventSource(url);
   
-  updateUI();
-  renderMarket();
-  renderPlayers();
-  renderChat();
-});
-
-socket.on('player-joined', (data) => {
-  gameState.players[data.player.id] = data.player;
-  renderPlayers();
-  addSystemMessage(`${data.player.name} присоединился`);
-});
-
-socket.on('player-left', (data) => {
-  delete gameState.players[data.playerId];
-  renderPlayers();
-  addSystemMessage(`${data.playerName} вышел`);
-});
-
-socket.on('storage-bought', (data) => {
-  gameState.market = data.market;
-  gameState.players = data.players;
-  renderMarket();
-  renderPlayers();
-});
-
-socket.on('pvz-opened', (data) => {
-  gameState.players = data.players;
-  gameState.market = data.market;
-  renderMarket();
-  renderPlayers();
-});
-
-socket.on('month-result', (data) => {
-  const player = data.player;
-  gameState.players[gameState.playerId] = player;
-  gameState.cityPvz = data.cityPvz;
-  gameState.month = data.month;
+  eventSource.onopen = () => {
+    console.log('SSE connected');
+    joinGame();
+  };
   
-  renderEvents(data.events);
-  updateUI();
-  renderPlayers();
+  eventSource.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    handleEvent(data);
+  };
   
-  if (player.bankrupt) {
-    showBankrupt();
+  eventSource.onerror = (e) => {
+    console.error('SSE error:', e);
+    setTimeout(connectSSE, 3000);
+  };
+}
+
+function handleEvent(data) {
+  switch(data.type) {
+    case 'init':
+      gameState.market = data.market;
+      gameState.players = data.players;
+      gameState.cityPvz = data.cityPvz;
+      gameState.month = data.month;
+      gameState.messages = data.messages;
+      updateUI();
+      renderMarket();
+      renderPlayers();
+      renderChat();
+      break;
+      
+    case 'player-joined':
+      gameState.players = data.players;
+      gameState.messages.push(data.message);
+      renderPlayers();
+      renderChat();
+      break;
+      
+    case 'storage-bought':
+      gameState.market = data.market;
+      gameState.players = data.players;
+      gameState.messages.push(data.message);
+      renderMarket();
+      renderPlayers();
+      renderChat();
+      break;
+      
+    case 'pvz-opened':
+      gameState.players = data.players;
+      gameState.messages.push(data.message);
+      renderMarket();
+      renderPlayers();
+      renderChat();
+      break;
+      
+    case 'month-result':
+      if (data.playerId === gameState.playerId) {
+        gameState.players[gameState.playerId] = data.player;
+        gameState.month = data.month;
+        gameState.cityPvz = data.cityPvz;
+        renderEvents(data.events);
+        updateUI();
+        renderPlayers();
+        
+        if (data.player.bankrupt) {
+          showBankrupt();
+        }
+      } else {
+        gameState.players[data.playerId] = data.player;
+        renderPlayers();
+      }
+      break;
+      
+    case 'chat':
+      gameState.messages.push(data.message);
+      renderChat();
+      break;
   }
-});
+}
 
-socket.on('player-turn', (data) => {
-  addSystemMessage(`${data.playerName} завершил месяц ${data.month}`);
-});
+async function joinGame() {
+  const res = await fetch(`${API_BASE}/join?room=${gameState.roomId}&name=${encodeURIComponent(gameState.playerName)}`);
+  const data = await res.json();
+  gameState.playerId = data.playerId;
+  gameState.players[data.playerId] = data.player;
+  updateUI();
+  renderPlayers();
+}
 
-socket.on('new-message', (msg) => {
-  gameState.messages.push(msg);
-  renderChat();
-});
+async function buyStorage(id) {
+  const res = await fetch(`${API_BASE}/buy?room=${gameState.roomId}&playerId=${gameState.playerId}&storageId=${id}`);
+  const data = await res.json();
+  if (data.error) {
+    alert(data.error);
+  }
+}
 
-socket.on('buy-failed', (data) => {
-  alert(data.reason);
-});
+async function openPvz(storageId, service) {
+  const res = await fetch(`${API_BASE}/open?room=${gameState.roomId}&playerId=${gameState.playerId}&storageId=${storageId}&service=${service}`);
+  const data = await res.json();
+  if (data.error) {
+    alert(data.error);
+  } else {
+    closeModal();
+  }
+}
 
-// UI Functions
+async function nextMonth() {
+  const res = await fetch(`${API_BASE}/next?room=${gameState.roomId}&playerId=${gameState.playerId}`);
+  const data = await res.json();
+  if (data.error) {
+    alert(data.error);
+  }
+}
+
+async function sendChat() {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  
+  await fetch(`${API_BASE}/chat?room=${gameState.roomId}&playerId=${gameState.playerId}&text=${encodeURIComponent(text)}`);
+  input.value = '';
+}
+
+// UI functions
 function updateUI() {
   const player = gameState.players[gameState.playerId];
   if (!player) return;
@@ -108,7 +164,7 @@ function updateUI() {
 }
 
 function formatMoney(m) {
-  return m.toLocaleString('ru-RU') + ' ₽';
+  return m?.toLocaleString('ru-RU') + ' ₽' || '0 ₽';
 }
 
 function renderMarket() {
@@ -119,17 +175,15 @@ function renderMarket() {
     const card = document.createElement('div');
     card.className = 'card' + (s.owner ? ' disabled' : '');
     
-    let ownerText = '';
-    if (s.owner) {
-      const owner = gameState.players[s.owner];
-      ownerText = owner ? `👤 ${owner.name}` : 'Занято';
-    }
+    const owner = s.owner ? gameState.players[s.owner] : null;
+    const isMine = s.owner === gameState.playerId;
     
-    let serviceBadge = '';
+    let statusHtml = '';
     if (s.service) {
       const colors = { 'Ozon': 'status-ozon', 'Wildberries': 'status-wb', 'Яндекс.Маркет': 'status-yandex' };
-      serviceBadge = `\n        \u003cspan class="card-status ${colors[s.service] || 'status-empty'}"\u003e${s.service}\u003c/span\u003e
-      `;
+      statusHtml = `\u003cspan class="card-status ${colors[s.service]}"\u003e${s.service}\u003c/span\u003e`;
+    } else if (isMine) {
+      statusHtml = `\u003cbutton class="btn btn-primary btn-small" onclick="openPvzModal(${s.id})"\u003eОткрыть ПВЗ\u003c/button\u003e`;
     }
     
     card.innerHTML = `
@@ -139,7 +193,7 @@ function renderMarket() {
       \u003c/div\u003e
       \u003cdiv class="card-info"\u003e📍 ${s.address}\u003c/div\u003e
       \u003cdiv class="card-info"\u003e📐 ${s.area} м² | Аренда: ${formatMoney(s.rent)}/мес\u003c/div\u003e
-      ${s.owner ? `\u003cdiv class="card-info"\u003e🔒 ${ownerText}\u003c/div\u003e${serviceBadge}` : '\u003cdiv class="card-info"\u003e✅ Свободно\u003c/div\u003e'}
+      ${owner ? `\u003cdiv class="card-info"\u003e🔒 ${owner.name}${isMine ? ' (ты)' : ''}\u003c/div\u003e${statusHtml}` : '\u003cdiv class="card-info"\u003e✅ Свободно\u003c/div\u003e'}
     `;
     
     if (!s.owner) {
@@ -155,7 +209,6 @@ function renderPlayers() {
   if (!list) return;
   
   list.innerHTML = '';
-  
   Object.values(gameState.players).forEach(p => {
     const isMe = p.id === gameState.playerId;
     const div = document.createElement('div');
@@ -163,7 +216,7 @@ function renderPlayers() {
     div.innerHTML = `
       \u003cstrong\u003e${p.name}${isMe ? ' (ты)' : ''}\u003c/strong\u003e
       \u003cbr\u003e💰 ${formatMoney(p.money)}
-      \u003cbr\u003e🏭 ${p.storages.length} кладовок
+      \u003cbr\u003e🏭 ${p.storages?.length || 0} кладовок
       ${p.bankrupt ? '\u003cbr\u003e💀 Банкрот' : ''}
     `;
     list.appendChild(div);
@@ -175,18 +228,15 @@ function renderChat() {
   if (!list) return;
   
   list.innerHTML = '';
-  
   gameState.messages.slice(-20).forEach(msg => {
     const div = document.createElement('div');
-    div.className = 'chat-message';
+    div.className = 'chat-message' + (msg.type !== 'chat' ? ' system' : '');
     
-    if (msg.type === 'chat') {
+    if (msg.type === 'chat' && msg.playerName) {
       div.innerHTML = `\u003cstrong\u003e${msg.playerName}:\u003c/strong\u003e ${msg.text}`;
     } else {
-      div.className += ' system';
       div.textContent = msg.text;
     }
-    
     list.appendChild(div);
   });
   
@@ -208,92 +258,40 @@ function renderEvents(events) {
   });
 }
 
-function addSystemMessage(text) {
-  const list = document.getElementById('chat-messages');
-  if (!list) return;
-  
-  const div = document.createElement('div');
-  div.className = 'chat-message system';
-  div.textContent = text;
-  list.appendChild(div);
-  list.scrollTop = list.scrollHeight;
-}
-
-function buyStorage(id) {
-  socket.emit('buy-storage', { storageId: id });
-}
-
 function openPvzModal(storageId) {
   const modalBody = document.getElementById('modal-body');
-  const player = gameState.players[gameState.playerId];
-  const storage = player.storages.find(s => s.id === storageId);
-  
-  if (!storage || storage.service) return;
-  
   modalBody.innerHTML = `
     \u003ch3\u003eОткрыть ПВЗ в кладовке #${storageId}\u003c/h3\u003e
     \u003cdiv style="margin: 20px 0;"\u003e
       \u003cdiv class="card" style="margin-bottom: 10px; cursor: pointer;" onclick="openPvz(${storageId}, 'ozon')"\u003e
-        \u003cdiv class="card-header"\u003e
-          \u003cspan class="card-title"\u003eOzon\u003c/span\u003e
-          \u003cspan class="card-price"\u003e50 000 ₽\u003c/span\u003e
-        \u003c/div\u003e
+        \u003cdiv class="card-header"\u003e\u003cspan class="card-title"\u003eOzon\u003c/span\u003e\u003cspan class="card-price"\u003e50 000 ₽\u003c/span\u003e\u003c/div\u003e
         \u003cdiv class="card-info"\u003e✅ Низкий риск, средняя маржа\u003c/div\u003e
       \u003c/div\u003e
       \u003cdiv class="card" style="margin-bottom: 10px; cursor: pointer;" onclick="openPvz(${storageId}, 'wb')"\u003e
-        \u003cdiv class="card-header"\u003e
-          \u003cspan class="card-title"\u003eWildberries\u003c/span\u003e
-          \u003cspan class="card-price"\u003e80 000 ₽\u003c/span\u003e
-        \u003c/div\u003e
+        \u003cdiv class="card-header"\u003e\u003cspan class="card-title"\u003eWildberries\u003c/span\u003e\u003cspan class="card-price"\u003e80 000 ₽\u003c/span\u003e\u003c/div\u003e
         \u003cdiv class="card-info"\u003e🔥 Высокая маржа (+30%), но бабы любят WB\u003c/div\u003e
       \u003c/div\u003e
       \u003cdiv class="card" style="cursor: pointer;" onclick="openPvz(${storageId}, 'yandex')"\u003e
-        \u003cdiv class="card-header"\u003e
-          \u003cspan class="card-title"\u003eЯндекс.Маркет\u003c/span\u003e
-          \u003cspan class="card-price"\u003e40 000 ₽\u003c/span\u003e
-        \u003c/div\u003e
+        \u003cdiv class="card-header"\u003e\u003cspan class="card-title"\u003eЯндекс.Маркет\u003c/span\u003e\u003cspan class="card-price"\u003e40 000 ₽\u003c/span\u003e\u003c/div\u003e
         \u003cdiv class="card-info"\u003e⚠️ Дешево, но -20% к доходу\u003c/div\u003e
       \u003c/div\u003e
     \u003c/div\u003e
   `;
-  
   document.getElementById('modal').classList.remove('hidden');
-}
-
-function openPvz(storageId, service) {
-  socket.emit('open-pvz', { storageId, service });
-  closeModal();
-}
-
-function nextMonth() {
-  socket.emit('next-month');
-}
-
-function sendChat() {
-  const input = document.getElementById('chat-input');
-  const text = input.value.trim();
-  if (text) {
-    socket.emit('chat-message', text);
-    input.value = '';
-  }
 }
 
 function showBankrupt() {
   const modalBody = document.getElementById('modal-body');
   const player = gameState.players[gameState.playerId];
-  
   modalBody.innerHTML = `
     \u003cdiv class="game-over"\u003e
       \u003cdiv style="font-size: 4rem;"\u003e💀\u003c/div\u003e
       \u003ch2\u003eБАНКРОТСТВО!\u003c/h2\u003e
       \u003cp\u003eТы выдержал ${gameState.month} месяцев\u003c/p\u003e
       \u003cp\u003eВстречено баб-зомби: ${player.zombieCounter}\u003c/p\u003e
-      \u003cbutton class="btn btn-primary" onclick="location.reload()" style="margin-top: 20px;"\u003e
-        🔄 Перезайти
-      \u003c/button\u003e
+      \u003cbutton class="btn btn-primary" onclick="location.reload()" style="margin-top: 20px;"\u003e🔄 Перезайти\u003c/button\u003e
     \u003c/div\u003e
   `;
-  
   document.getElementById('modal').classList.remove('hidden');
 }
 
@@ -303,7 +301,6 @@ function closeModal() {
 
 // Event listeners
 document.getElementById('btn-market')?.addEventListener('click', () => {
-  renderMarket();
   document.getElementById('market-section').scrollIntoView({ behavior: 'smooth' });
 });
 
@@ -316,13 +313,11 @@ document.getElementById('btn-chat')?.addEventListener('click', () => {
 });
 
 document.getElementById('btn-next')?.addEventListener('click', nextMonth);
-
 document.getElementById('chat-send')?.addEventListener('click', sendChat);
 document.getElementById('chat-input')?.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') sendChat();
 });
-
 document.querySelector('.close')?.addEventListener('click', closeModal);
 
 // Init
-joinRoom();
+init();

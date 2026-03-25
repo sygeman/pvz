@@ -1,4 +1,13 @@
 {
   "version": 2,
-  "name": "kladochnik"
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/game.js"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/$1"
+    }
+  ]
 }

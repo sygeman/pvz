@@ -1,6 +1,6 @@
 # КЛАДОВОЧНИК 2.0: Мультиплеер
 
-Игра про ПВЗ и баб-зомби. Теперь с мультиплеером!
+Игра про ПВЗ и баб-зомби. Теперь с мультиплеером на Vercel!
 
 ## 🎮 Играть
 
@@ -19,7 +19,9 @@ https://pvz-nine.vercel.app/
 - **Мамочка** — 25 позиций, ничего не берёт, только нарекаёт
 - **Шопоголик** — 40 позиций по акциям, отказывается от 37
 
-## 🚀 Мультиплеер
+## 🚀 Мультиплеер на Vercel
+
+Технология: **Server-Sent Events (SSE)** — сервер пушит обновления клиентам без WebSockets.
 
 ### Как играть вместе
 
@@ -41,77 +43,40 @@ https://pvz-nine.vercel.app/?room=ptz2026&name=Антон
 - **Лидерборд** — следи за балансом других игроков
 - **События** — видишь, когда другие открывают ПВЗ или ходят в новый месяц
 
-## 🏗️ Деплой своего сервера
+## 🏗️ Деплой своей версии
 
-Если хочешь поднять свой сервер (например, на Railway или Render):
+### Vercel (рекомендую)
 
-### 1. Форкни репу
+1. Форкни репозиторий
+2. Импортируй на [vercel.com](https://vercel.com)
+3. Framework Preset: **Other**
+4. Deploy
 
-### 2. Railway (рекомендую)
-
-```bash
-# Установи Railway CLI
-npm i -g @railway/cli
-
-# Залогинься
-railway login
-
-# Инициализируй проект
-cd pvz
-railway init
-
-# Деплой
-railway up
-```
-
-Railway автоматически определит Node.js и запустит `server.js`.
-
-### 3. Или Render
-
-- New Web Service
-- Connect GitHub repo
-- Build Command: `npm install`
-- Start Command: `node server.js`
-- Environment: `NODE_ENV=production`
-
-### 4. Или локально
-
-```bash
-git clone https://github.com/sygeman/pvz.git
-cd pvz
-npm install
-npm start
-```
-
-Открой http://localhost:3000
+Всё, мультиплеер работает из коробки.
 
 ## 📝 Структура
 
 ```
 ├── index.html      # Клиент
+├── game.js         # Клиентская логика (SSE)
 ├── style.css       # Стили
-├── game.js         # Клиентская логика + Socket.io
-├── server.js       # Сервер Node.js + Socket.io
-├── package.json    # Зависимости
-└── README.md       # Этот файл
+├── api/
+│   └── game.js     # Serverless API (SSE endpoints)
+├── vercel.json     # Конфиг маршрутов
+└── README.md
 ```
 
 ## 🛠️ Технологии
 
-- **Frontend**: Vanilla JS, Socket.io-client
-- **Backend**: Node.js, Express, Socket.io
-- **Хостинг**: Vercel (frontend) + Railway/Render (backend)
+- **Frontend**: Vanilla JS + Server-Sent Events (EventSource)
+- **Backend**: Vercel Serverless Functions (Node.js)
+- **Realtime**: SSE (HTTP-based, работает на Vercel)
 
-## ⚠️ Важно
+## ⚠️ Ограничения
 
-Vercel не поддерживает WebSockets на бесплатном тарифе. Поэтому:
-- **Фронтенд** можно хостить на Vercel (уже сделано)
-- **Сервер** нужен отдельный (Railway, Render, Heroku и т.д.)
-
-Если деплоишь свой сервер — обнови URL сервера в `game.js`:
-```javascript
-const socket = io('https://твой-сервер.railway.app');
-```
+- **Stateless**: состояние хранится в памяти сервера. При редеплое или если сервер уснёт (Vercel иногда спит) — игра сбросится.
+- Для постоянного хранения нужна база данных (Redis, Supabase, etc.)
+- Для production с persistent state используй Railway/Render с настоящим сервером
 
 ---
 

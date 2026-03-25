@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "bun run --hot server.js",
     "build": "cd client && bun run build",
-    "start": "bun run server.js"
+    "start": "bun run server.js",
+    "test": "bun test test/api.test.js"
   },
   "dependencies": {
     "hono": "^3.12.0",

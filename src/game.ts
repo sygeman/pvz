@@ -98,18 +98,20 @@ export function updateRoomActivity(room: Room): void {
   roomLastActivity.set(room.id, Date.now());
 }
 
-export function broadcast(room: Room, data: unknown): void {
+export async function broadcast(room: Room, data: unknown): Promise<void> {
   const dead: number[] = [];
   const message = `data: ${JSON.stringify(data)}\n\n`;
+  const encoded = new TextEncoder().encode(message);
   
-  room.clients.forEach((client, index) => {
-    try {
-      const encoded = client.encoder.encode(message);
-      client.writer.write(encoded);
-    } catch {
-      dead.push(index);
-    }
-  });
+  await Promise.all(
+    room.clients.map(async (client, index) => {
+      try {
+        await client.writer.write(encoded);
+      } catch {
+        dead.push(index);
+      }
+    })
+  );
   
   // Remove dead clients (in reverse order to preserve indices)
   dead.reverse().forEach(index => {

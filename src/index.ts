@@ -83,7 +83,7 @@ const app = new Elysia()
         baby: room.baby,
         players: Array.from(room.players.values())
       };
-      writer.write(encoder.encode(`data: ${JSON.stringify(initEvent)}\n\n`));
+      writer.write(encoder.encode(`data: ${JSON.stringify(initEvent)}\n\n`)).catch(() => {});
       
       // Handle client disconnect
       const cleanup = () => {
@@ -108,7 +108,7 @@ const app = new Elysia()
   })
   
   // Join room
-  .post('/api/room/:roomId/join', ({ params: { roomId }, body }) => {
+  .post('/api/room/:roomId/join', async ({ params: { roomId }, body }) => {
     try {
       const validRoomId = validateRoomId(roomId);
       const room = getOrCreateRoom(validRoomId);
@@ -142,7 +142,7 @@ const app = new Elysia()
       
       updateRoomActivity(room);
       
-      broadcast(room, {
+      await broadcast(room, {
         type: 'player-joined',
         player,
         players: Array.from(room.players.values())
@@ -161,7 +161,7 @@ const app = new Elysia()
   })
   
   // Click baby with PvE progression mechanics
-  .post('/api/room/:roomId/click', ({ params: { roomId }, body }) => {
+  .post('/api/room/:roomId/click', async ({ params: { roomId }, body }) => {
     try {
       const validRoomId = validateRoomId(roomId);
       const room = rooms.get(validRoomId);
@@ -211,7 +211,7 @@ const app = new Elysia()
         leveledUp = true;
         
         // Notify about level up
-        broadcast(room, {
+        await broadcast(room, {
           type: 'player-leveled-up',
           player,
           newLevel: player.level
@@ -234,7 +234,7 @@ const app = new Elysia()
           player.xpToNextLevel = killLevelUpResult.newXpToNext;
           player.damage = calculateDamage(player.level);
           
-          broadcast(room, {
+          await broadcast(room, {
             type: 'player-leveled-up',
             player,
             newLevel: player.level
@@ -248,7 +248,7 @@ const app = new Elysia()
         
         updateRoomActivity(room);
         
-        broadcast(room, {
+        await broadcast(room, {
           type: 'baby-killed',
           killer: player,
           reward: killedBaby.reward,
@@ -272,7 +272,7 @@ const app = new Elysia()
       // Baby damaged but alive
       updateRoomActivity(room);
       
-      broadcast(room, {
+      await broadcast(room, {
         type: 'baby-damaged',
         baby: room.baby,
         attacker: player,

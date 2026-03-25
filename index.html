@@ -3,65 +3,87 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Кладовочник 2.0: Бабы-Зомби</title>
+    <title>Кладовочник 2.0: Мультиплеер</title>
     <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 </head>
 <body>
     <div class="container">
         <header>
             <h1>🏪 КЛАДОВОЧНИК 2.0</h1>
-            <h2>🧟‍♀️ Бабы-Зомби</h2>
-            <p class="subtitle">Выживи среди шопоголиков в Петрозаводске</p>
+            <h2>🧟‍♀️ Мультиплеер</h2>
+            <div class="room-info">
+                <span id="room-info">Комната: -</span> | 
+                <span id="player-name">Игрок</span>
+            </div>
         </header>
 
-        <div id="game-screen" class="screen active">
-            <div class="stats-panel">
-                <div class="stat">
-                    <span class="stat-label">📅 Месяц</span>
-                    <span id="month" class="stat-value">1</span>
-                </div>
-                <div class="stat">
-                    <span class="stat-label">💰 Баланс</span>
-                    <span id="money" class="stat-value">500 000 ₽</span>
-                </div>
-                <div class="stat">
-                    <span class="stat-label">🏪 ПВЗ в городе</span>
-                    <span id="city-pvz" class="stat-value">12</span>
-                </div>
-                <div class="stat">
-                    <span class="stat-label">🧟‍♀️ Баб встречено</span>
-                    <span id="zombies" class="stat-value">0</span>
-                </div>
+        <div class="stats-panel">
+            <div class="stat">
+                <span class="stat-label">📅 Месяц</span>
+                <span id="month" class="stat-value">1</span>
             </div>
-
-            <div id="market-section" class="section">
-                <h3>🏪 Рынок кладовок</h3>
-                <div id="market-list" class="card-list"></div>
+            <div class="stat">
+                <span class="stat-label">💰 Баланс</span>
+                <span id="money" class="stat-value">500 000 ₽</span>
             </div>
-
-            <div id="storages-section" class="section">
-                <h3>🏭 Мои кладовки</h3>
-                <div id="storages-list" class="card-list"></div>
+            <div class="stat">
+                <span class="stat-label">🏪 ПВЗ в городе</span>
+                <span id="city-pvz" class="stat-value">12</span>
             </div>
-
-            <div id="events-section" class="section hidden">
-                <h3>📢 События месяца</h3>
-                <div id="events-list"></div>
-            </div>
-
-            <div class="actions">
-                <button id="btn-market" class="btn btn-primary">🏪 Рынок</button>
-                <button id="btn-storages" class="btn btn-primary">🏭 Мои кладовки</button>
-                <button id="btn-next" class="btn btn-danger">📅 Следующий месяц</button>
-                <button id="btn-restart" class="btn btn-secondary">🔄 Новая игра</button>
+            <div class="stat">
+                <span class="stat-label">🧟‍♀️ Баб</span>
+                <span id="zombies" class="stat-value">0</span>
             </div>
         </div>
 
-        <div id="modal" class="modal hidden">
-            <div class="modal-content">
-                <span class="close">&times;</span>
-                <div id="modal-body"></div>
+        <div class="game-layout">
+            <div class="main-panel">
+                <div id="market-section" class="section">
+                    <h3>🏪 Рынок кладовок</h3>
+                    <div id="market-list" class="card-list"></div>
+                </div>
+
+                <div id="events-section" class="section hidden">
+                    <h3>📢 События месяца</h3>
+                    <div id="events-list"></div>
+                </div>
             </div>
+
+            <div class="side-panel">
+                <div id="players-section" class="section">
+                    <h3>👥 Игроки</h3>
+                    <div id="players-list" class="player-list"></div>
+                </div>
+
+                <div id="chat-section" class="section">
+                    <h3>💬 Чат</h3>
+                    <div id="chat-messages" class="chat-messages"></div>
+                    <div class="chat-input-area">
+                        <input type="text" id="chat-input" placeholder="Сообщение..." maxlength="100">
+                        <button id="chat-send" class="btn btn-small">➤</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="actions">
+            <button id="btn-market" class="btn btn-primary">🏪 Рынок</button>
+            <button id="btn-players" class="btn btn-secondary">👥 Игроки</button>
+            <button id="btn-chat" class="btn btn-secondary">💬 Чат</button>
+            <button id="btn-next" class="btn btn-danger">📅 След. месяц</button>
+        </div>
+
+        <div class="help-text">
+            <p>🔗 Пригласи друга: добавь в URL <code>?room=НАЗВАНИЕ&name=ИМЯ</code></p>
+            <p>Пример: <code>https://pvz-nine.vercel.app/?room=ptz2026&name=Антон</code></p>
+        </div>
+    </div>
+
+    <div id="modal" class="modal hidden">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <div id="modal-body"></div>
         </div>
     </div>
 

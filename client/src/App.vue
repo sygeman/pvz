@@ -21,16 +21,17 @@
           @keyup.enter="join"
           maxlength="20"
         />
-        <input 
-          v-model="roomId" 
-          placeholder="Название комнаты" 
-          @keyup.enter="join"
-          maxlength="20"
-        />
         
-        <button @click="join" :disabled="!playerName || !roomId">
+        <div class="room-info">
+          <span>Комната: <strong>{{ roomId }}</strong></span>
+          <button @click="generateRoomId" class="btn-small" title="Сгенерировать новую">🔄</button>
+        </div>
+        
+        <button @click="join" :disabled="!playerName">
           Играть
         </button>
+        
+        <p class="hint">Поделись URL чтобы пригласить друзей</p>
       </div>
     </div>
     
@@ -38,7 +39,8 @@
     <div v-else class="game">
       <header>
         <div class="room-info">
-          Комната: {{ roomId }}
+          <span>Комната: <strong>{{ roomId }}</strong></span>
+          <button @click="copyLink" class="btn-small" title="Копировать ссылку">📋</button>
           <button @click="exit" class="exit-btn">Выйти</button>
         </div>
         <div class="stats">
@@ -109,7 +111,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue';
 const STORAGE_KEY = 'babies_zombies_session';
 
 const playerName = ref('');
-const roomId = ref('default');
+const roomId = ref('');
 const connected = ref(false);
 const playerId = ref(null);
 const money = ref(0);
@@ -131,14 +133,50 @@ function formatMoney(m) {
   return m.toLocaleString('ru-RU');
 }
 
-// Load saved session on mount
+function generateRoomId() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let result = '';
+  for (let i = 0; i < 5; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  roomId.value = result;
+  
+  // Update URL without reloading
+  const url = new URL(window.location.href);
+  url.searchParams.set('room', result);
+  window.history.replaceState({}, '', url);
+}
+
+function copyLink() {
+  const url = `${window.location.origin}/?room=${roomId.value}`;
+  navigator.clipboard.writeText(url).then(() => {
+    alert('Ссылка скопирована!');
+  });
+}
+
+// Load saved session or URL params on mount
 onMounted(() => {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved) {
-    try {
-      savedSession.value = JSON.parse(saved);
-    } catch (e) {
-      localStorage.removeItem(STORAGE_KEY);
+  const urlParams = new URLSearchParams(window.location.search);
+  const urlRoom = urlParams.get('room');
+  
+  // Try URL param first
+  if (urlRoom && urlRoom.length === 5) {
+    roomId.value = urlRoom.toUpperCase();
+  } else {
+    // Try localStorage
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const session = JSON.parse(saved);
+        savedSession.value = session;
+        roomId.value = session.roomId;
+      } catch (e) {
+        localStorage.removeItem(STORAGE_KEY);
+        generateRoomId();
+      }
+    } else {
+      // Generate new room
+      generateRoomId();
     }
   }
 });
@@ -156,6 +194,7 @@ function saveSession() {
 function clearSession() {
   localStorage.removeItem(STORAGE_KEY);
   savedSession.value = null;
+  generateRoomId();
 }
 
 function exit() {
@@ -165,7 +204,10 @@ function exit() {
   }
   connected.value = false;
   playerId.value = null;
-  // Don't clear localStorage — allow reconnect
+  // Update URL to remove room focus
+  const url = new URL(window.location.href);
+  url.searchParams.delete('room');
+  window.history.replaceState({}, '', url);
 }
 
 async function reconnect() {
@@ -175,6 +217,26 @@ async function reconnect() {
   playerName.value = savedSession.value.playerName;
   roomId.value = savedSession.value.roomId;
   
+  // Update URL
+  const url = new URL(window.location.href);
+  url.searchParams.set('room', roomId.value);
+  window.history.replaceState({}, '', url);
+  
+  await doJoin();
+}
+
+async function join() {
+  if (!playerName.value || !roomId.value) return;
+  
+  // Update URL with room
+  const url = new URL(window.location.href);
+  url.searchParams.set('room', roomId.value);
+  window.history.replaceState({}, '', url);
+  
+  await doJoin();
+}
+
+async function doJoin() {
   try {
     const res = await fetch(`/api/room/${roomId.value}/join`, {
       method: 'POST',
@@ -188,12 +250,10 @@ async function reconnect() {
     const data = await res.json();
     
     if (data.reconnected) {
-      // Restore stats
       money.value = data.player.money;
       clicks.value = data.player.clicks;
       kills.value = data.player.kills;
     } else {
-      // New player ID assigned
       playerId.value = data.playerId;
       money.value = 0;
       clicks.value = 0;
@@ -201,33 +261,6 @@ async function reconnect() {
     }
     
     baby.value = data.baby;
-    connected.value = true;
-    
-    saveSession();
-    connectSSE();
-  } catch (e) {
-    alert('Ошибка подключения');
-    clearSession();
-  }
-}
-
-async function join() {
-  if (!playerName.value || !roomId.value) return;
-  
-  try {
-    const res = await fetch(`/api/room/${roomId.value}/join`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: playerName.value })
-    });
-    
-    const data = await res.json();
-    playerId.value = data.playerId;
-    money.value = data.player.money;
-    clicks.value = data.player.clicks;
-    kills.value = data.player.kills;
-    baby.value = data.baby;
-    
     connected.value = true;
     
     saveSession();
@@ -255,7 +288,6 @@ function handleEvent(data) {
     case 'init':
       baby.value = data.baby;
       players.value = data.players;
-      // Update our stats from server
       const me = data.players.find(p => p.id === playerId.value);
       if (me) {
         money.value = me.money;
@@ -421,10 +453,54 @@ onUnmounted(() => {
   background: rgba(255,255,255,0.1);
   color: #fff;
   font-size: 1rem;
+  text-align: center;
 }
 
 .join-form input:focus {
   outline: 2px solid #ff6b6b;
+}
+
+.join-form input::placeholder {
+  color: #666;
+}
+
+.room-info {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 15px;
+  background: rgba(255,255,255,0.05);
+  border-radius: 8px;
+  font-size: 1.1rem;
+}
+
+.room-info strong {
+  color: #4ecdc4;
+  font-family: monospace;
+  font-size: 1.3rem;
+  letter-spacing: 2px;
+}
+
+.btn-small {
+  background: transparent;
+  border: 1px solid #666;
+  color: #888;
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.btn-small:hover {
+  color: #fff;
+  border-color: #fff;
+}
+
+.hint {
+  color: #666;
+  font-size: 0.85rem;
+  margin-top: 10px;
 }
 
 .join-form button {
@@ -466,7 +542,12 @@ header {
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: 15px;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.room-info strong {
+  color: #4ecdc4;
 }
 
 .exit-btn {

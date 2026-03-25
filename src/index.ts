@@ -154,7 +154,7 @@ const app = new Elysia()
   }, {
     body: t.Object({
       name: t.String({ minLength: 1, maxLength: 20 }),
-      playerId: t.Optional(t.String())
+      playerId: t.Optional(t.Union([t.String(), t.Null()]))
     })
   })
   

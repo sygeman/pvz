@@ -66,6 +66,22 @@ describe('SSE Content-Type Test', () => {
     expect(contentType).toContain('text/html');
   });
 
+  it('join accepts playerId: null without 422 error', async () => {
+    const roomId = 'N' + Date.now();
+    
+    const response = await fetch(`http://localhost:${TEST_PORT}/api/room/${roomId}/join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'NullTest', playerId: null })
+    });
+    
+    // Should NOT return 422 - should accept null playerId
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.error).toBeUndefined();
+    expect(data.player).toBeDefined();
+  });
+
   it('API endpoints return application/json, not text/event-stream', async () => {
     const roomId = 'APICT' + Date.now();
     

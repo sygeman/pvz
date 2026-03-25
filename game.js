@@ -1,297 +1,310 @@
-// SSE Multiplayer Client for Vercel
-let gameState = {
-  roomId: 'default',
-  playerId: null,
-  playerName: null,
-  market: [],
-  players: {},
-  cityPvz: 12,
-  month: 1,
-  messages: [],
-  connected: false
+// Single-player version - works offline with localStorage
+const ADDRESSES = [
+  "ул. Ленина, 15 (подвал)", "пр. Карла Маркса, 42 (цоколь)",
+  "ул. Куйбышева, 7 (1 этаж)", "ул. Антикайнена, 23 (помещение)",
+  "пр. Первомайский, 88 (тех.этаж)", "ул. Федосова, 5 (цоколь)",
+  "ул. Красная, 31 (подвал)", "пр. Лососинское, 156 (1 этаж)",
+  "ул. Красноармейская, 12 (цоколь)", "ул. Пушкинская, 8 (подвал)",
+];
+
+const BABY_ZOMBIES = [
+  { name: "Тётя Галя с 50 заказами", desc: "Пришла тётка с огромными пакетами, перебрала всё, забрала только чехол для телефона", rep: -8, cost: -15000 },
+  { name: "Бабушка с 30 парами тапочек", desc: "Бабуля заказала 30 пар тапочек, померила все, забрала 2 самые дешёвые", rep: -5, cost: -8000 },
+  { name: "Мамочка с детскими вещами", desc: "Мама заказала кучу детской одежды, ничего не подошло, ушла с нареканиями", rep: -10, cost: -12000 },
+  { name: "Шопоголик со скидками", desc: "Девушка скупила всё по акциям, отказалась от 37 позиций", rep: -6, cost: -10000 }
+];
+
+const SERVICES = {
+  ozon: { name: "Ozon", cost: 50000, m: 1.0 },
+  wb: { name: "Wildberries", cost: 80000, m: 1.3 },
+  yandex: { name: "Яндекс.Маркет", cost: 40000, m: 0.8 }
 };
 
-let eventSource = null;
-const API_BASE = '/api';
+let game = {
+  money: 500000,
+  month: 1,
+  cityPvz: 12,
+  zombieCounter: 0,
+  storages: [],
+  market: [],
+  events: []
+};
 
-function init() {
-  const urlParams = new URLSearchParams(window.location.search);
-  gameState.roomId = urlParams.get('room') || 'default';
-  gameState.playerName = urlParams.get('name') || 'Игрок' + Math.floor(Math.random() * 1000);
-  
-  document.getElementById('room-info').textContent = `Комната: ${gameState.roomId}`;
-  document.getElementById('player-name').textContent = gameState.playerName;
-  
-  connectSSE();
-}
-
-function connectSSE() {
-  const url = `${API_BASE}/events?room=${gameState.roomId}`;
-  eventSource = new EventSource(url);
-  
-  eventSource.onopen = () => {
-    console.log('SSE connected');
-    joinGame();
-  };
-  
-  eventSource.onmessage = (e) => {
-    const data = JSON.parse(e.data);
-    handleEvent(data);
-  };
-  
-  eventSource.onerror = (e) => {
-    console.error('SSE error:', e);
-    setTimeout(connectSSE, 3000);
-  };
-}
-
-function handleEvent(data) {
-  switch(data.type) {
-    case 'init':
-      gameState.market = data.market;
-      gameState.players = data.players;
-      gameState.cityPvz = data.cityPvz;
-      gameState.month = data.month;
-      gameState.messages = data.messages;
-      updateUI();
-      renderMarket();
-      renderPlayers();
-      renderChat();
-      break;
-      
-    case 'player-joined':
-      gameState.players = data.players;
-      gameState.messages.push(data.message);
-      renderPlayers();
-      renderChat();
-      break;
-      
-    case 'storage-bought':
-      gameState.market = data.market;
-      gameState.players = data.players;
-      gameState.messages.push(data.message);
-      renderMarket();
-      renderPlayers();
-      renderChat();
-      break;
-      
-    case 'pvz-opened':
-      gameState.players = data.players;
-      gameState.messages.push(data.message);
-      renderMarket();
-      renderPlayers();
-      renderChat();
-      break;
-      
-    case 'month-result':
-      if (data.playerId === gameState.playerId) {
-        gameState.players[gameState.playerId] = data.player;
-        gameState.month = data.month;
-        gameState.cityPvz = data.cityPvz;
-        renderEvents(data.events);
-        updateUI();
-        renderPlayers();
-        
-        if (data.player.bankrupt) {
-          showBankrupt();
-        }
-      } else {
-        gameState.players[data.playerId] = data.player;
-        renderPlayers();
-      }
-      break;
-      
-    case 'chat':
-      gameState.messages.push(data.message);
-      renderChat();
-      break;
+function generateMarket() {
+  const market = [];
+  const used = [];
+  for (let i = 0; i < 5; i++) {
+    const available = ADDRESSES.filter(a => !used.includes(a));
+    const addr = available[Math.floor(Math.random() * available.length)];
+    used.push(addr);
+    const area = [12, 15, 18, 20, 25, 30][Math.floor(Math.random() * 6)];
+    market.push({
+      id: i + 1, address: addr, area,
+      price: area * (80000 + Math.floor(Math.random() * 40000)),
+      rent: area * (800 + Math.floor(Math.random() * 700)),
+      hasPvz: false, service: null, income: 0, rep: 50
+    });
   }
+  return market;
 }
 
-async function joinGame() {
-  const res = await fetch(`${API_BASE}/join?room=${gameState.roomId}&name=${encodeURIComponent(gameState.playerName)}`);
-  const data = await res.json();
-  gameState.playerId = data.playerId;
-  gameState.players[data.playerId] = data.player;
-  updateUI();
-  renderPlayers();
-}
-
-async function buyStorage(id) {
-  const res = await fetch(`${API_BASE}/buy?room=${gameState.roomId}&playerId=${gameState.playerId}&storageId=${id}`);
-  const data = await res.json();
-  if (data.error) {
-    alert(data.error);
-  }
-}
-
-async function openPvz(storageId, service) {
-  const res = await fetch(`${API_BASE}/open?room=${gameState.roomId}&playerId=${gameState.playerId}&storageId=${storageId}&service=${service}`);
-  const data = await res.json();
-  if (data.error) {
-    alert(data.error);
+function load() {
+  const saved = localStorage.getItem('pvz_game');
+  if (saved) {
+    Object.assign(game, JSON.parse(saved));
   } else {
-    closeModal();
+    game.market = generateMarket();
   }
 }
 
-async function nextMonth() {
-  const res = await fetch(`${API_BASE}/next?room=${gameState.roomId}&playerId=${gameState.playerId}`);
-  const data = await res.json();
-  if (data.error) {
-    alert(data.error);
-  }
-}
-
-async function sendChat() {
-  const input = document.getElementById('chat-input');
-  const text = input.value.trim();
-  if (!text) return;
-  
-  await fetch(`${API_BASE}/chat?room=${gameState.roomId}&playerId=${gameState.playerId}&text=${encodeURIComponent(text)}`);
-  input.value = '';
-}
-
-// UI functions
-function updateUI() {
-  const player = gameState.players[gameState.playerId];
-  if (!player) return;
-  
-  document.getElementById('month').textContent = gameState.month;
-  document.getElementById('money').textContent = formatMoney(player.money);
-  document.getElementById('city-pvz').textContent = gameState.cityPvz;
-  document.getElementById('zombies').textContent = player.zombieCounter;
+function save() {
+  localStorage.setItem('pvz_game', JSON.stringify(game));
 }
 
 function formatMoney(m) {
-  return m?.toLocaleString('ru-RU') + ' ₽' || '0 ₽';
+  return m.toLocaleString('ru-RU') + ' ₽';
+}
+
+function updateUI() {
+  document.getElementById('month').textContent = game.month;
+  document.getElementById('money').textContent = formatMoney(game.money);
+  document.getElementById('city-pvz').textContent = game.cityPvz;
+  document.getElementById('zombies').textContent = game.zombieCounter;
 }
 
 function renderMarket() {
   const list = document.getElementById('market-list');
   list.innerHTML = '';
   
-  gameState.market.forEach(s => {
+  game.market.forEach(s => {
+    if (s.hasPvz) return;
+    
     const card = document.createElement('div');
-    card.className = 'card' + (s.owner ? ' disabled' : '');
-    
-    const owner = s.owner ? gameState.players[s.owner] : null;
-    const isMine = s.owner === gameState.playerId;
-    
-    let statusHtml = '';
-    if (s.service) {
-      const colors = { 'Ozon': 'status-ozon', 'Wildberries': 'status-wb', 'Яндекс.Маркет': 'status-yandex' };
-      statusHtml = `\u003cspan class="card-status ${colors[s.service]}"\u003e${s.service}\u003c/span\u003e`;
-    } else if (isMine) {
-      statusHtml = `\u003cbutton class="btn btn-primary btn-small" onclick="openPvzModal(${s.id})"\u003eОткрыть ПВЗ\u003c/button\u003e`;
-    }
-    
+    card.className = 'card';
     card.innerHTML = `
-      \u003cdiv class="card-header"\u003e
-        \u003cspan class="card-title"\u003eКладовка #${s.id}\u003c/span\u003e
-        \u003cspan class="card-price"\u003e${formatMoney(s.price)}\u003c/span\u003e
-      \u003c/div\u003e
-      \u003cdiv class="card-info"\u003e📍 ${s.address}\u003c/div\u003e
-      \u003cdiv class="card-info"\u003e📐 ${s.area} м² | Аренда: ${formatMoney(s.rent)}/мес\u003c/div\u003e
-      ${owner ? `\u003cdiv class="card-info"\u003e🔒 ${owner.name}${isMine ? ' (ты)' : ''}\u003c/div\u003e${statusHtml}` : '\u003cdiv class="card-info"\u003e✅ Свободно\u003c/div\u003e'}
+      <div class="card-header">
+        <span class="card-title">Кладовка #${s.id}</span>
+        <span class="card-price">${formatMoney(s.price)}</span>
+      </div>
+      <div class="card-info">📍 ${s.address}</div>
+      <div class="card-info">📐 ${s.area} м² | Аренда: ${formatMoney(s.rent)}/мес</div>
     `;
-    
-    if (!s.owner) {
-      card.onclick = () => buyStorage(s.id);
-    }
-    
+    card.onclick = () => buyStorage(s.id);
     list.appendChild(card);
   });
 }
 
-function renderPlayers() {
-  const list = document.getElementById('players-list');
+function renderStorages() {
+  const list = document.getElementById('storages-list');
   if (!list) return;
   
   list.innerHTML = '';
-  Object.values(gameState.players).forEach(p => {
-    const isMe = p.id === gameState.playerId;
-    const div = document.createElement('div');
-    div.className = 'player-item' + (isMe ? ' me' : '') + (p.bankrupt ? ' bankrupt' : '');
-    div.innerHTML = `
-      \u003cstrong\u003e${p.name}${isMe ? ' (ты)' : ''}\u003c/strong\u003e
-      \u003cbr\u003e💰 ${formatMoney(p.money)}
-      \u003cbr\u003e🏭 ${p.storages?.length || 0} кладовок
-      ${p.bankrupt ? '\u003cbr\u003e💀 Банкрот' : ''}
-    `;
-    list.appendChild(div);
-  });
-}
-
-function renderChat() {
-  const list = document.getElementById('chat-messages');
-  if (!list) return;
   
-  list.innerHTML = '';
-  gameState.messages.slice(-20).forEach(msg => {
-    const div = document.createElement('div');
-    div.className = 'chat-message' + (msg.type !== 'chat' ? ' system' : '');
+  if (game.storages.length === 0) {
+    list.innerHTML = '<p style="color: #888;">У тебя нет кладовок. Купи на рынке!</p>';
+    return;
+  }
+  
+  game.storages.forEach(s => {
+    const card = document.createElement('div');
+    card.className = 'card';
     
-    if (msg.type === 'chat' && msg.playerName) {
-      div.innerHTML = `\u003cstrong\u003e${msg.playerName}:\u003c/strong\u003e ${msg.text}`;
+    let statusHtml = '';
+    if (s.service) {
+      const colors = { 'Ozon': 'status-ozon', 'Wildberries': 'status-wb', 'Яндекс.Маркет': 'status-yandex' };
+      statusHtml = `
+        <span class="card-status ${colors[s.service] || 'status-empty'}">${s.service}</span>
+        <div class="card-info">💰 Доход: ${formatMoney(s.income)}/мес</div>
+        <div class="card-info">⭐ Репутация: ${s.rep}/100</div>
+      `;
     } else {
-      div.textContent = msg.text;
+      statusHtml = `
+        <span class="card-status status-empty">ПУСТО</span>
+        <div style="margin-top: 10px;">
+          <button class="btn btn-primary" onclick="openPvzModal(${s.id})" ${s.area < 15 ? 'disabled' : ''}>
+            Открыть ПВЗ ${s.area < 15 ? '(мало места)' : ''}
+          </button>
+        </div>
+      `;
     }
-    list.appendChild(div);
+    
+    card.innerHTML = `
+      <div class="card-header">
+        <span class="card-title">Кладовка #${s.id}</span>
+      </div>
+      <div class="card-info">📍 ${s.address}</div>
+      <div class="card-info">📐 ${s.area} м² | Аренда: ${formatMoney(s.rent)}/мес</div>
+      ${statusHtml}
+    `;
+    list.appendChild(card);
   });
-  
-  list.scrollTop = list.scrollHeight;
 }
 
-function renderEvents(events) {
-  const list = document.getElementById('events-list');
-  const section = document.getElementById('events-section');
+function buyStorage(id) {
+  const storage = game.market.find(s => s.id === id);
+  if (!storage || storage.hasPvz || game.money < storage.price) {
+    showModal('❌ Не удалось купить', 'Недостаточно денег или кладовка уже продана.');
+    return;
+  }
   
-  section.classList.remove('hidden');
-  list.innerHTML = '';
+  game.money -= storage.price;
+  storage.hasPvz = true;
+  game.storages.push({...storage});
   
-  events.forEach(e => {
-    const div = document.createElement('div');
-    div.className = 'event event-' + e.type;
-    div.innerHTML = e.text + (e.desc ? `\u003cbr\u003e\u003csmall\u003e${e.desc}\u003c/small\u003e` : '');
-    list.appendChild(div);
+  // Add new storage
+  const newId = Math.max(...game.market.map(s => s.id)) + 1;
+  const used = game.market.map(s => s.address);
+  const available = ADDRESSES.filter(a => !used.includes(a));
+  const addr = available[Math.floor(Math.random() * available.length)];
+  const area = [12, 15, 18, 20, 25, 30][Math.floor(Math.random() * 6)];
+  game.market.push({
+    id: newId, address: addr, area,
+    price: area * (80000 + Math.floor(Math.random() * 40000)),
+    rent: area * (800 + Math.floor(Math.random() * 700)),
+    hasPvz: false, service: null, income: 0, rep: 50
   });
+  
+  save();
+  updateUI();
+  renderMarket();
+  if (document.getElementById('storages-section')) renderStorages();
+  showModal('✅ Кладовка куплена!', `Теперь у тебя ${game.storages.length} кладовок.`);
 }
 
 function openPvzModal(storageId) {
   const modalBody = document.getElementById('modal-body');
   modalBody.innerHTML = `
-    \u003ch3\u003eОткрыть ПВЗ в кладовке #${storageId}\u003c/h3\u003e
-    \u003cdiv style="margin: 20px 0;"\u003e
-      \u003cdiv class="card" style="margin-bottom: 10px; cursor: pointer;" onclick="openPvz(${storageId}, 'ozon')"\u003e
-        \u003cdiv class="card-header"\u003e\u003cspan class="card-title"\u003eOzon\u003c/span\u003e\u003cspan class="card-price"\u003e50 000 ₽\u003c/span\u003e\u003c/div\u003e
-        \u003cdiv class="card-info"\u003e✅ Низкий риск, средняя маржа\u003c/div\u003e
-      \u003c/div\u003e
-      \u003cdiv class="card" style="margin-bottom: 10px; cursor: pointer;" onclick="openPvz(${storageId}, 'wb')"\u003e
-        \u003cdiv class="card-header"\u003e\u003cspan class="card-title"\u003eWildberries\u003c/span\u003e\u003cspan class="card-price"\u003e80 000 ₽\u003c/span\u003e\u003c/div\u003e
-        \u003cdiv class="card-info"\u003e🔥 Высокая маржа (+30%), но бабы любят WB\u003c/div\u003e
-      \u003c/div\u003e
-      \u003cdiv class="card" style="cursor: pointer;" onclick="openPvz(${storageId}, 'yandex')"\u003e
-        \u003cdiv class="card-header"\u003e\u003cspan class="card-title"\u003eЯндекс.Маркет\u003c/span\u003e\u003cspan class="card-price"\u003e40 000 ₽\u003c/span\u003e\u003c/div\u003e
-        \u003cdiv class="card-info"\u003e⚠️ Дешево, но -20% к доходу\u003c/div\u003e
-      \u003c/div\u003e
-    \u003c/div\u003e
+    <h3>Выбери сервис для ПВЗ #${storageId}</h3>
+    <div style="margin: 20px 0;">
+      ${Object.entries(SERVICES).map(([key, svc]) => `
+        <div class="card" style="margin-bottom: 10px; cursor: pointer;" onclick="openPvz(${storageId}, '${key}')">
+          <div class="card-header">
+            <span class="card-title">${svc.name}</span>
+            <span class="card-price">${formatMoney(svc.cost)}</span>
+          </div>
+          <div class="card-info">
+            ${svc.m > 1 ? '🔥 Высокая маржа (+30%)' : svc.m < 1 ? '⚠️ Рискованно (-20%)' : '✅ Средний риск'}
+          </div>
+        </div>
+      `).join('')}
+    </div>
   `;
   document.getElementById('modal').classList.remove('hidden');
 }
 
+function openPvz(storageId, serviceKey) {
+  const storage = game.storages.find(s => s.id === storageId);
+  const service = SERVICES[serviceKey];
+  if (!storage || storage.service || game.money < service.cost) {
+    showModal('❌ Ошибка', 'Недостаточно денег или кладовка занята.');
+    return;
+  }
+  
+  game.money -= service.cost;
+  storage.service = service.name;
+  storage.serviceKey = serviceKey;
+  storage.income = Math.floor(storage.area * (2000 + Math.floor(Math.random() * 1500)) * service.m);
+  
+  save();
+  closeModal();
+  updateUI();
+  renderStorages();
+  showModal('✅ ПВЗ открыт!', `${service.name} работает! Ожидаемый доход: ${formatMoney(storage.income)}/мес`);
+}
+
+function nextMonth() {
+  game.events = [];
+  
+  const newPvz = 1 + Math.floor(Math.random() * 3);
+  game.cityPvz += newPvz;
+  game.events.push({ type: 'info', text: `В городе открылось ${newPvz} новых ПВЗ! Всего: ${game.cityPvz}` });
+  
+  let totalIncome = 0, totalExpenses = 0;
+  
+  game.storages.forEach(s => {
+    totalExpenses += s.rent;
+    
+    if (s.service) {
+      let income = s.income;
+      const competition = Math.max(0.3, 1 - (game.cityPvz * 0.02));
+      income = Math.floor(income * competition);
+      
+      if (Math.random() < 0.20) {
+        const baby = BABY_ZOMBIES[Math.floor(Math.random() * BABY_ZOMBIES.length)];
+        game.zombieCounter++;
+        game.events.push({
+          type: 'baby', text: `🧟‍♀️ ${baby.name}!`,
+          desc: baby.desc, cost: baby.cost
+        });
+        s.rep = Math.max(0, Math.min(100, s.rep + baby.rep));
+        income += baby.cost;
+      }
+      
+      income = Math.floor(income * (0.5 + (s.rep / 100)));
+      totalIncome += Math.max(0, income);
+    }
+  });
+  
+  const profit = totalIncome - totalExpenses;
+  game.money += profit;
+  game.month++;
+  
+  game.events.push({
+    type: profit >= 0 ? 'good' : 'bad',
+    text: `Итоги: доход +${formatMoney(totalIncome)}, аренда -${formatMoney(totalExpenses)}, прибыль ${profit >= 0 ? '+' : ''}${formatMoney(profit)}`
+  });
+  
+  save();
+  
+  if (game.money < 0) {
+    showBankrupt();
+  } else {
+    const section = document.getElementById('events-section');
+    const list = document.getElementById('events-list');
+    if (section && list) {
+      section.classList.remove('hidden');
+      list.innerHTML = game.events.map(e => `
+        <div class="event event-${e.type}">
+          ${e.text}${e.desc ? `<br><small>${e.desc}</small>` : ''}
+        </div>
+      `).join('');
+    }
+    updateUI();
+    renderStorages();
+  }
+}
+
 function showBankrupt() {
   const modalBody = document.getElementById('modal-body');
-  const player = gameState.players[gameState.playerId];
   modalBody.innerHTML = `
-    \u003cdiv class="game-over"\u003e
-      \u003cdiv style="font-size: 4rem;"\u003e💀\u003c/div\u003e
-      \u003ch2\u003eБАНКРОТСТВО!\u003c/h2\u003e
-      \u003cp\u003eТы выдержал ${gameState.month} месяцев\u003c/p\u003e
-      \u003cp\u003eВстречено баб-зомби: ${player.zombieCounter}\u003c/p\u003e
-      \u003cbutton class="btn btn-primary" onclick="location.reload()" style="margin-top: 20px;"\u003e🔄 Перезайти\u003c/button\u003e
-    \u003c/div\u003e
+    <div class="game-over">
+      <div style="font-size: 4rem;">💀</div>
+      <h2>БАНКРОТСТВО!</h2>
+      <p>Ты выдержал ${game.month} месяцев</p>
+      <p>Встречено баб-зомби: ${game.zombieCounter}</p>
+      <button class="btn btn-primary" onclick="restartGame()" style="margin-top: 20px;">🔄 Новая игра</button>
+    </div>
   `;
+  document.getElementById('modal').classList.remove('hidden');
+}
+
+function restartGame() {
+  game = {
+    money: 500000, month: 1, cityPvz: 12, zombieCounter: 0,
+    storages: [], market: generateMarket(), events: []
+  };
+  save();
+  closeModal();
+  updateUI();
+  renderMarket();
+  if (document.getElementById('storages-section')) renderStorages();
+  const section = document.getElementById('events-section');
+  if (section) section.classList.add('hidden');
+}
+
+function showModal(title, text) {
+  const modalBody = document.getElementById('modal-body');
+  modalBody.innerHTML = `<h3>${title}</h3><p>${text}</p>`;
   document.getElementById('modal').classList.remove('hidden');
 }
 
@@ -299,25 +312,25 @@ function closeModal() {
   document.getElementById('modal').classList.add('hidden');
 }
 
+// Init
+load();
+updateUI();
+renderMarket();
+renderStorages();
+
 // Event listeners
 document.getElementById('btn-market')?.addEventListener('click', () => {
   document.getElementById('market-section').scrollIntoView({ behavior: 'smooth' });
 });
 
-document.getElementById('btn-players')?.addEventListener('click', () => {
-  document.getElementById('players-section').classList.toggle('hidden');
-});
-
-document.getElementById('btn-chat')?.addEventListener('click', () => {
-  document.getElementById('chat-section').classList.toggle('hidden');
+document.getElementById('btn-storages')?.addEventListener('click', () => {
+  renderStorages();
+  document.getElementById('storages-section').scrollIntoView({ behavior: 'smooth' });
 });
 
 document.getElementById('btn-next')?.addEventListener('click', nextMonth);
-document.getElementById('chat-send')?.addEventListener('click', sendChat);
-document.getElementById('chat-input')?.addEventListener('keypress', (e) => {
-  if (e.key === 'Enter') sendChat();
-});
+document.getElementById('btn-restart')?.addEventListener('click', restartGame);
 document.querySelector('.close')?.addEventListener('click', closeModal);
-
-// Init
-init();
+document.getElementById('modal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'modal') closeModal();
+});

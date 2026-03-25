@@ -3,19 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Кладовочник 2.0: Мультиплеер</title>
+    <title>Кладовочник 2.0: Бабы-Зомби</title>
     <link rel="stylesheet" href="style.css">
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 </head>
 <body>
     <div class="container">
         <header>
             <h1>🏪 КЛАДОВОЧНИК 2.0</h1>
-            <h2>🧟‍♀️ Мультиплеер</h2>
-            <div class="room-info">
-                <span id="room-info">Комната: -</span> | 
-                <span id="player-name">Игрок</span>
-            </div>
+            <h2>🧟‍♀️ Бабы-Зомби</h2>
+            <p class="subtitle">Открывай ПВЗ в Петрозаводске и выживай среди шопоголиков</p>
         </header>
 
         <div class="stats-panel">
@@ -37,46 +33,26 @@
             </div>
         </div>
 
-        <div class="game-layout">
-            <div class="main-panel">
-                <div id="market-section" class="section">
-                    <h3>🏪 Рынок кладовок</h3>
-                    <div id="market-list" class="card-list"></div>
-                </div>
+        <div id="market-section" class="section">
+            <h3>🏪 Рынок кладовок</h3>
+            <div id="market-list" class="card-list"></div>
+        </div>
 
-                <div id="events-section" class="section hidden">
-                    <h3>📢 События месяца</h3>
-                    <div id="events-list"></div>
-                </div>
-            </div>
+        <div id="storages-section" class="section">
+            <h3>📦 Мои кладовки</h3>
+            <div id="storages-list" class="card-list"></div>
+        </div>
 
-            <div class="side-panel">
-                <div id="players-section" class="section">
-                    <h3>👥 Игроки</h3>
-                    <div id="players-list" class="player-list"></div>
-                </div>
-
-                <div id="chat-section" class="section">
-                    <h3>💬 Чат</h3>
-                    <div id="chat-messages" class="chat-messages"></div>
-                    <div class="chat-input-area">
-                        <input type="text" id="chat-input" placeholder="Сообщение..." maxlength="100">
-                        <button id="chat-send" class="btn btn-small">➤</button>
-                    </div>
-                </div>
-            </div>
+        <div id="events-section" class="section hidden">
+            <h3>📢 События месяца</h3>
+            <div id="events-list"></div>
         </div>
 
         <div class="actions">
             <button id="btn-market" class="btn btn-primary">🏪 Рынок</button>
-            <button id="btn-players" class="btn btn-secondary">👥 Игроки</button>
-            <button id="btn-chat" class="btn btn-secondary">💬 Чат</button>
+            <button id="btn-storages" class="btn btn-secondary">📦 Мои кладовки</button>
             <button id="btn-next" class="btn btn-danger">📅 След. месяц</button>
-        </div>
-
-        <div class="help-text">
-            <p>🔗 Пригласи друга: добавь в URL <code>?room=НАЗВАНИЕ&name=ИМЯ</code></p>
-            <p>Пример: <code>https://pvz-nine.vercel.app/?room=ptz2026&name=Антон</code></p>
+            <button id="btn-restart" class="btn btn-secondary">🔄 С начала</button>
         </div>
     </div>
 

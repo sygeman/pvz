@@ -3,7 +3,7 @@
     <!-- Lobby -->
     <div v-if="!connected" class="lobby">
       <h1>🧟‍♀️ БАБЫ-ЗОМБИ</h1>
-      <p>Мультиплеер кликер</p>
+      <p class="subtitle">PvE Кооперативный Кликер ⚔️</p>
       
       <div v-if="savedSession" class="saved-session">
         <p>Привет, <strong>{{ savedSession.playerName }}</strong>!</p>
@@ -38,7 +38,7 @@
           {{ isLoading ? 'Подключение...' : 'Играть' }}
         </button>
         
-        <p class="hint">Поделись URL чтобы пригласить друзей</p>
+        <p class="hint">Поделись URL чтобы пригласить друзей в кооп</p>
       </div>
     </div>
     
@@ -50,10 +50,41 @@
           <button @click="copyLink" class="btn-small" title="Копировать ссылку">📋</button>
           <button @click="exit" class="exit-btn">Выйти</button>
         </div>
+        
+        <!-- Player Stats -->
+        <div class="player-stats">
+          <div class="stat level">
+            <span class="label">Уровень</span>
+            <span class="value">⭐ {{ level }}</span>
+          </div>
+          <div class="stat xp">
+            <span class="label">Опыт</span>
+            <div class="xp-bar">
+              <div class="xp-fill" :style="{ width: xpPercent + '%' }"></div>
+            </div>
+            <span class="xp-text">{{ xp }} / {{ xpToNext }}</span>
+          </div>
+          
+          <div class="stat damage">
+            <span class="label">Урон</span>
+            <span class="value">⚔️ {{ damage }}</span>
+          </div>
+        </div>
+        
         <div class="stats">
-          <div class="stat">💰 {{ formatMoney(money) }}</div>
-          <div class="stat">🖱️ {{ clicks }}</div>
-          <div class="stat">💀 {{ kills }}</div>
+          <div class="stat" title="Общий урон (основной счёт)">
+            <span class="label">Урон</span>
+            <span class="value">⚔️ {{ formatNumber(totalDamage) }}</span>
+          </div>
+          <div class="stat" title="Количество кликов">
+            <span class="label">Клики</span>
+            <span class="value">🖱️ {{ formatNumber(clicks) }}</span>
+          </div>
+          
+          <div class="stat" title="Убийств баб">
+            <span class="label">Убийства</span>
+            <span class="value">💀 {{ kills }}</span>
+          </div>
         </div>
       </header>
       
@@ -67,23 +98,30 @@
           <div class="hp-bar">
             <div 
               class="hp-fill" 
-              :class="{ 'critical': baby.currentHp / baby.maxHp < 0.3 }"
+              :class="{ 'critical': baby.currentHp / baby.maxHp < 0.2 }"
               :style="{ width: Math.max(0, baby.currentHp / baby.maxHp * 100) + '%' }"
             ></div>
           </div>
           
-          <div class="hp-text">{{ Math.max(0, baby.currentHp) }} / {{ baby.maxHp }} HP</div>
+          <div class="hp-text">{{ formatNumber(Math.max(0, baby.currentHp)) }} / {{ formatNumber(baby.maxHp) }} HP</div>
           
-          <div class="reward">💰 {{ formatMoney(baby.reward) }}</div>
+          <div class="reward">💰 +{{ formatNumber(baby.reward) }} XP за убийство</div>
         </div>
         
-        <div class="click-hint" v-if="baby.currentHp > 0">КЛИКАЙ БЫСТРЕЕ!</div>
-        <div class="click-hint dead" v-else>БАБА УБИТА!</div>
+        <div class="click-hint" v-if="baby.currentHp > 0">
+          КЛИКАЙ! Наносишь {{ damage }} урона за клик
+        </div>
+        <div class="click-hint dead" v-else>🎉 БАБА УБИТА! +{{ lastKillBonus }} XP</div>
+      </div>
+      
+      <!-- Damage Popup -->
+      <div v-if="showDamagePopup" class="damage-popup">
+        +{{ lastDamage }} урона! +{{ lastXpGained }} XP
       </div>
       
       <!-- Leaderboard -->
       <div class="leaderboard">
-        <h3>🏆 Топ игроков</h3>
+        <h3>🏆 Топ дамагеров</h3>
         
         <div class="players">
           <div 
@@ -93,8 +131,8 @@
             :class="{ 'me': p.id === playerId }"
           >
             <span class="rank">#{{ i + 1 }}</span>
-            <span class="name">{{ p.name }}</span>
-            <span class="money">💰 {{ formatMoney(p.money) }}</span>
+            <span class="name">⭐{{ p.level }} {{ p.name }}</span>
+            <span class="damage">⚔️ {{ formatNumber(p.totalDamage) }}</span>
             <span class="kills">💀 {{ p.kills }}</span>
           </div>
         </div>
@@ -106,8 +144,18 @@
           v-for="msg in killFeed" 
           :key="msg.id"
           class="message"
+          :class="msg.type"
         >
           {{ msg.text }}
+        </div>
+      </div>
+      
+      <!-- Level Up Notification -->
+      <div v-if="showLevelUp" class="level-up-notification">
+        <div class="level-up-content">
+          <div class="level-up-icon">⭐</div>
+          <div class="level-up-text">УРОВЕНЬ {{ level }}!</div>
+          <div class="level-up-bonus">Урон: {{ damage }} ⚔️</div>
         </div>
       </div>
       
@@ -123,7 +171,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 
 const STORAGE_KEY = 'babies_zombies_session';
-const CLICK_COOLDOWN_MS = 50; // Min time between clicks
+const CLICK_COOLDOWN_MS = 50;
 const MAX_RECONNECT_ATTEMPTS = 10;
 const RECONNECT_BASE_DELAY = 1000;
 
@@ -131,11 +179,21 @@ const playerName = ref('');
 const roomId = ref('');
 const connected = ref(false);
 const playerId = ref(null);
-const money = ref(0);
+
+// Player progression stats
+const level = ref(1);
+const xp = ref(0);
+const xpToNext = ref(100);
+const damage = ref(1);
+const totalDamage = ref(0);
+
+// Game stats
 const clicks = ref(0);
 const kills = ref(0);
 const baby = ref(null);
 const players = ref([]);
+
+// UI state
 const killFeed = ref([]);
 const hitEffect = ref(false);
 const savedSession = ref(null);
@@ -143,18 +201,32 @@ const isInvited = ref(false);
 const isLoading = ref(false);
 const sseConnected = ref(false);
 const reconnectAttempt = ref(0);
+const showDamagePopup = ref(false);
+const showLevelUp = ref(false);
+const lastDamage = ref(0);
+const lastXpGained = ref(0);
+const lastKillBonus = ref(0);
 
 let eventSource = null;
 let reconnectTimeout = null;
 let lastClickTime = 0;
+let damagePopupTimeout = null;
+let levelUpTimeout = null;
 
 const sortedPlayers = computed(() => {
-  return [...players.value].sort((a, b) => b.money - a.money);
+  return [...players.value].sort((a, b) => b.totalDamage - a.totalDamage);
 });
 
-function formatMoney(m) {
-  if (typeof m !== 'number') return '0';
-  return m.toLocaleString('ru-RU');
+const xpPercent = computed(() => {
+  if (xpToNext.value <= 0) return 100;
+  return Math.min(100, Math.max(0, (xp.value / xpToNext.value) * 100));
+});
+
+function formatNumber(n) {
+  if (typeof n !== 'number') return '0';
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+  return n.toLocaleString('ru-RU');
 }
 
 function generateRoomId() {
@@ -173,18 +245,10 @@ function generateRoomId() {
 function copyLink() {
   const url = `${window.location.origin}/?room=${roomId.value}`;
   navigator.clipboard.writeText(url).then(() => {
-    showNotification('Ссылка скопирована!');
-  }).catch(() => {
-    alert('Ссылка скопирована!');
+    addKillFeed('🔗 Ссылка скопирована!', 'info');
   });
 }
 
-function showNotification(text) {
-  // Simple in-app notification instead of alert
-  addKillFeed(text);
-}
-
-// Load saved session or URL params on mount
 onMounted(() => {
   const urlParams = new URLSearchParams(window.location.search);
   const urlRoom = urlParams.get('room');
@@ -244,7 +308,11 @@ function exit() {
   disconnectSSE();
   connected.value = false;
   playerId.value = null;
-  money.value = 0;
+  level.value = 1;
+  xp.value = 0;
+  xpToNext.value = 100;
+  damage.value = 1;
+  totalDamage.value = 0;
   clicks.value = 0;
   kills.value = 0;
   baby.value = null;
@@ -315,12 +383,22 @@ async function doJoin() {
     }
     
     if (data.reconnected) {
-      money.value = data.player.money || 0;
-      clicks.value = data.player.clicks || 0;
-      kills.value = data.player.kills || 0;
+      const p = data.player;
+      level.value = p.level || 1;
+      xp.value = p.xp || 0;
+      xpToNext.value = p.xpToNextLevel || 100;
+      damage.value = p.damage || 1;
+      totalDamage.value = p.totalDamage || 0;
+      clicks.value = p.clicks || 0;
+      kills.value = p.kills || 0;
     } else {
       playerId.value = data.playerId;
-      money.value = 0;
+      const p = data.player;
+      level.value = p.level || 1;
+      xp.value = p.xp || 0;
+      xpToNext.value = p.xpToNextLevel || 100;
+      damage.value = p.damage || 1;
+      totalDamage.value = 0;
       clicks.value = 0;
       kills.value = 0;
     }
@@ -392,7 +470,11 @@ function handleEvent(data) {
       players.value = data.players || [];
       const me = data.players?.find(p => p.id === playerId.value);
       if (me) {
-        money.value = me.money || 0;
+        level.value = me.level || 1;
+        xp.value = me.xp || 0;
+        xpToNext.value = me.xpToNextLevel || 100;
+        damage.value = me.damage || 1;
+        totalDamage.value = me.totalDamage || 0;
         clicks.value = me.clicks || 0;
         kills.value = me.kills || 0;
       }
@@ -406,6 +488,10 @@ function handleEvent(data) {
       if (data.baby) {
         baby.value = data.baby;
       }
+      // Show other players' damage in feed
+      if (data.attacker?.id !== playerId.value && data.attacker?.name) {
+        addKillFeed(`${data.attacker.name} нанёс ${data.damage} урона!`, 'damage');
+      }
       break;
       
     case 'baby-killed':
@@ -417,29 +503,48 @@ function handleEvent(data) {
       }
       
       if (data.killer?.id === playerId.value) {
-        money.value = data.killer.money || 0;
-        kills.value = data.killer.kills || 0;
+        totalDamage.value = data.killer.totalDamage || totalDamage.value;
+        kills.value = data.killer.kills || kills.value;
       }
       
       if (data.killer?.name) {
-        const reward = data.reward || 0;
-        addKillFeed(`${data.killer.name} убил бабу и получил ${formatMoney(reward)}₽! 💀`);
+        lastKillBonus.value = data.bonusXp || 0;
+        addKillFeed(`🎉 ${data.killer.name} добил бабу! +${formatNumber(data.bonusXp || 0)} XP`, 'kill');
+      }
+      break;
+      
+    case 'player-leveled-up':
+      if (data.player?.id === playerId.value) {
+        level.value = data.newLevel;
+        damage.value = data.player.damage;
+        xp.value = data.player.xp;
+        xpToNext.value = data.player.xpToNextLevel;
+        showLevelUpNotification();
+      }
+      if (data.player?.name) {
+        addKillFeed(`⭐ ${data.player.name} достиг уровня ${data.newLevel}!`, 'levelup');
       }
       break;
   }
 }
 
+function showLevelUpNotification() {
+  showLevelUp.value = true;
+  if (levelUpTimeout) clearTimeout(levelUpTimeout);
+  levelUpTimeout = setTimeout(() => {
+    showLevelUp.value = false;
+  }, 3000);
+}
+
 async function clickBaby() {
   if (!baby.value || !playerId.value) return;
   
-  // Rate limiting
   const now = Date.now();
   if (now - lastClickTime < CLICK_COOLDOWN_MS) {
-    return; // Ignore rapid clicks
+    return;
   }
   lastClickTime = now;
   
-  // Don't click dead babies
   if (baby.value.currentHp <= 0) {
     return;
   }
@@ -451,7 +556,7 @@ async function clickBaby() {
     const res = await fetch(`/api/room/${roomId.value}/click`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ playerId: playerId.value, damage: 1 })
+      body: JSON.stringify({ playerId: playerId.value })
     });
     
     if (!res.ok) {
@@ -465,9 +570,11 @@ async function clickBaby() {
       return;
     }
     
+    // Update local stats
     if (data.killed) {
-      money.value = data.player?.money || money.value;
+      totalDamage.value = data.player?.totalDamage || totalDamage.value;
       kills.value = data.player?.kills || kills.value;
+      lastKillBonus.value = data.bonusXp || 0;
       if (data.baby) {
         baby.value = data.baby;
       }
@@ -477,23 +584,45 @@ async function clickBaby() {
       }
     }
     
+    // Show damage popup
+    lastDamage.value = data.damage || 0;
+    lastXpGained.value = data.xpGained || 0;
+    showDamagePopup.value = true;
+    if (damagePopupTimeout) clearTimeout(damagePopupTimeout);
+    damagePopupTimeout = setTimeout(() => {
+      showDamagePopup.value = false;
+    }, 1000);
+    
+    // Update XP and check for level up
+    if (data.player) {
+      xp.value = data.player.xp;
+      xpToNext.value = data.player.xpToNextLevel;
+      if (data.leveledUp) {
+        level.value = data.player.level;
+        damage.value = data.player.damage;
+        showLevelUpNotification();
+      }
+    }
+    
     clicks.value++;
   } catch (e) {
     console.error('Click failed:', e);
   }
 }
 
-function addKillFeed(text) {
+function addKillFeed(text, type = 'info') {
   const id = Date.now() + Math.random();
-  killFeed.value.unshift({ id, text });
+  killFeed.value.unshift({ id, text, type });
   if (killFeed.value.length > 5) killFeed.value.pop();
   setTimeout(() => {
     killFeed.value = killFeed.value.filter(m => m.id !== id);
-  }, 3000);
+  }, 4000);
 }
 
 onUnmounted(() => {
   disconnectSSE();
+  if (damagePopupTimeout) clearTimeout(damagePopupTimeout);
+  if (levelUpTimeout) clearTimeout(levelUpTimeout);
 });
 </script>
 
@@ -528,8 +657,9 @@ onUnmounted(() => {
   margin-bottom: 10px;
 }
 
-.lobby p {
-  color: #888;
+.lobby .subtitle {
+  color: #4ecdc4;
+  font-size: 1.2rem;
   margin-bottom: 40px;
 }
 
@@ -542,6 +672,7 @@ onUnmounted(() => {
 
 .saved-session p {
   margin-bottom: 10px;
+  color: #888;
 }
 
 .saved-session .buttons {
@@ -696,7 +827,7 @@ onUnmounted(() => {
 }
 
 .game {
-  max-width: 800px;
+  max-width: 900px;
   margin: 0 auto;
   padding: 20px;
 }
@@ -708,7 +839,7 @@ header {
 
 header .room-info {
   color: #888;
-  margin-bottom: 10px;
+  margin-bottom: 15px;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -735,13 +866,91 @@ header .room-info strong {
   border-color: #fff;
 }
 
+/* Player Stats Bar */
+.player-stats {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 15px;
+  padding: 15px;
+  background: rgba(0,0,0,0.3);
+  border-radius: 12px;
+  flex-wrap: wrap;
+}
+
+.player-stats .stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.player-stats .stat .label {
+  font-size: 0.75rem;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.player-stats .stat .value {
+  font-size: 1.3rem;
+  font-weight: bold;
+  color: #ffd700;
+}
+
+.player-stats .stat.level .value {
+  color: #4ecdc4;
+}
+
+.player-stats .stat.damage .value {
+  color: #ff6b6b;
+}
+
+.player-stats .stat.xp {
+  min-width: 150px;
+}
+
+.xp-bar {
+  width: 120px;
+  height: 8px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.xp-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4ecdc4, #44a08d);
+  transition: width 0.3s;
+}
+
+.xp-text {
+  font-size: 0.75rem;
+  color: #888;
+}
+
+/* Main Stats */
 .stats {
   display: flex;
   justify-content: center;
   gap: 30px;
+  flex-wrap: wrap;
 }
 
-.stat {
+.stats .stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.stats .stat .label {
+  font-size: 0.8rem;
+  color: #888;
+}
+
+.stats .stat .value {
   font-size: 1.5rem;
   font-weight: bold;
   color: #ffd700;
@@ -751,18 +960,20 @@ header .room-info strong {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 40px 20px;
+  padding: 30px 20px;
   cursor: pointer;
   user-select: none;
+  position: relative;
 }
 
 .baby {
   text-align: center;
   background: rgba(255,255,255,0.05);
-  padding: 40px;
+  padding: 30px 40px;
   border-radius: 20px;
   border: 2px solid rgba(255,107,107,0.3);
   transition: transform 0.1s, opacity 0.3s;
+  min-width: 280px;
 }
 
 .baby.dead {
@@ -775,9 +986,9 @@ header .room-info strong {
 }
 
 .emoji {
-  font-size: 8rem;
+  font-size: 7rem;
   line-height: 1;
-  margin-bottom: 20px;
+  margin-bottom: 15px;
   transition: transform 0.1s;
 }
 
@@ -790,10 +1001,10 @@ header .room-info strong {
 }
 
 .baby .name {
-  font-size: 2rem;
+  font-size: 1.8rem;
   font-weight: bold;
   color: #ff6b6b;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .baby.dead .name {
@@ -802,16 +1013,19 @@ header .room-info strong {
 
 .baby .desc {
   color: #888;
-  margin-bottom: 20px;
+  margin-bottom: 15px;
+  font-size: 0.9rem;
 }
 
 .hp-bar {
-  width: 200px;
-  height: 20px;
+  width: 100%;
+  max-width: 250px;
+  height: 24px;
   background: rgba(0,0,0,0.3);
-  border-radius: 10px;
+  border-radius: 12px;
   overflow: hidden;
   margin: 0 auto 10px;
+  border: 2px solid rgba(255,255,255,0.1);
 }
 
 .hp-fill {
@@ -827,31 +1041,34 @@ header .room-info strong {
 
 @keyframes pulse-critical {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
+  50% { opacity: 0.6; }
 }
 
 .hp-text {
   color: #888;
   font-size: 0.9rem;
-  margin-bottom: 15px;
+  margin-bottom: 12px;
 }
 
 .reward {
-  font-size: 1.5rem;
-  color: #ffd700;
+  font-size: 1rem;
+  color: #4ecdc4;
   font-weight: bold;
 }
 
 .click-hint {
-  margin-top: 30px;
-  font-size: 1.2rem;
+  margin-top: 20px;
+  font-size: 1rem;
   color: #4ecdc4;
   animation: pulse 1s infinite;
+  text-align: center;
 }
 
 .click-hint.dead {
-  color: #666;
+  color: #ffd700;
   animation: none;
+  font-size: 1.2rem;
+  font-weight: bold;
 }
 
 @keyframes pulse {
@@ -859,11 +1076,35 @@ header .room-info strong {
   50% { opacity: 0.5; }
 }
 
+/* Damage Popup */
+.damage-popup {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0,0,0,0.9);
+  color: #ffd700;
+  padding: 15px 25px;
+  border-radius: 12px;
+  font-size: 1.2rem;
+  font-weight: bold;
+  border: 2px solid #ffd700;
+  animation: damagePopup 1s forwards;
+  z-index: 10;
+  pointer-events: none;
+}
+
+@keyframes damagePopup {
+  0% { opacity: 0; transform: translate(-50%, -30%) scale(0.8); }
+  20% { opacity: 1; transform: translate(-50%, -60%) scale(1.1); }
+  100% { opacity: 0; transform: translate(-50%, -100%) scale(1); }
+}
+
 .leaderboard {
   background: rgba(255,255,255,0.05);
   border-radius: 15px;
   padding: 20px;
-  margin-top: 30px;
+  margin-top: 20px;
 }
 
 .leaderboard h3 {
@@ -883,7 +1124,7 @@ header .room-info strong {
   grid-template-columns: 40px 1fr auto auto;
   gap: 15px;
   align-items: center;
-  padding: 10px 15px;
+  padding: 12px 15px;
   background: rgba(0,0,0,0.2);
   border-radius: 8px;
 }
@@ -900,14 +1141,16 @@ header .room-info strong {
 
 .player .name {
   font-weight: 500;
+  font-size: 0.95rem;
 }
 
-.player .money {
-  color: #ffd700;
+.player .damage {
+  color: #ff6b6b;
+  font-weight: bold;
 }
 
 .player .kills {
-  color: #ff6b6b;
+  color: #ffd700;
 }
 
 .kill-feed {
@@ -919,14 +1162,36 @@ header .room-info strong {
   gap: 10px;
   pointer-events: none;
   z-index: 100;
+  max-width: 300px;
 }
 
 .kill-feed .message {
-  background: rgba(0,0,0,0.8);
-  padding: 10px 20px;
+  background: rgba(0,0,0,0.85);
+  padding: 12px 18px;
   border-radius: 8px;
-  border-left: 4px solid #ffd700;
-  animation: slideIn 0.3s, fadeOut 0.3s 2.7s forwards;
+  border-left: 4px solid #888;
+  animation: slideIn 0.3s, fadeOut 0.3s 3.7s forwards;
+  font-size: 0.9rem;
+}
+
+.kill-feed .message.kill {
+  border-left-color: #ff6b6b;
+  color: #ff6b6b;
+}
+
+.kill-feed .message.levelup {
+  border-left-color: #ffd700;
+  color: #ffd700;
+  font-weight: bold;
+}
+
+.kill-feed .message.damage {
+  border-left-color: #4ecdc4;
+  color: #4ecdc4;
+}
+
+.kill-feed .message.info {
+  border-left-color: #888;
 }
 
 @keyframes slideIn {
@@ -936,6 +1201,58 @@ header .room-info strong {
 
 @keyframes fadeOut {
   to { opacity: 0; }
+}
+
+/* Level Up Notification */
+.level-up-notification {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 200;
+  animation: levelUpPulse 3s forwards;
+  pointer-events: none;
+}
+
+.level-up-content {
+  background: linear-gradient(135deg, rgba(78,205,196,0.9), rgba(68,160,141,0.9));
+  padding: 40px 60px;
+  border-radius: 20px;
+  text-align: center;
+  border: 3px solid #ffd700;
+  box-shadow: 0 0 50px rgba(78,205,196,0.5);
+}
+
+.level-up-icon {
+  font-size: 5rem;
+  margin-bottom: 10px;
+  animation: bounce 0.5s infinite alternate;
+}
+
+.level-up-text {
+  font-size: 2.5rem;
+  font-weight: bold;
+  color: #fff;
+  text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+  margin-bottom: 10px;
+}
+
+.level-up-bonus {
+  font-size: 1.3rem;
+  color: #ffd700;
+}
+
+@keyframes levelUpPulse {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.5); }
+  15% { opacity: 1; transform: translate(-50%, -50%) scale(1.1); }
+  20% { transform: translate(-50%, -50%) scale(1); }
+  85% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes bounce {
+  from { transform: scale(1); }
+  to { transform: scale(1.2); }
 }
 
 .connection-status {
@@ -960,15 +1277,32 @@ header .room-info strong {
     font-size: 2rem;
   }
   
+  .lobby .subtitle {
+    font-size: 1rem;
+  }
+  
   .emoji {
     font-size: 5rem;
   }
   
-  .stats {
+  .player-stats {
     gap: 15px;
+    padding: 12px;
   }
   
-  .stat {
+  .player-stats .stat.xp {
+    min-width: 100px;
+  }
+  
+  .xp-bar {
+    width: 80px;
+  }
+  
+  .stats {
+    gap: 20px;
+  }
+  
+  .stats .stat .value {
     font-size: 1.2rem;
   }
   
@@ -976,14 +1310,30 @@ header .room-info strong {
     flex-direction: column;
   }
   
+  .baby {
+    min-width: auto;
+    padding: 20px;
+  }
+  
+  .player {
+    grid-template-columns: 30px 1fr auto auto;
+    gap: 10px;
+    padding: 10px;
+  }
+  
   .kill-feed {
     left: 10px;
     right: 10px;
     top: 10px;
+    max-width: none;
   }
   
-  .kill-feed .message {
-    font-size: 0.9rem;
+  .level-up-content {
+    padding: 30px 40px;
+  }
+  
+  .level-up-text {
+    font-size: 1.8rem;
   }
 }
 </style>

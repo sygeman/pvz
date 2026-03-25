@@ -17,8 +17,12 @@ export interface Baby extends BabyType {
 export interface Player {
   id: string;
   name: string;
+  level: number;
+  xp: number;
+  xpToNextLevel: number;
+  damage: number;
+  totalDamage: number;  // Total damage dealt (score)
   clicks: number;
-  money: number;
   kills: number;
   joinedAt: number;
 }
@@ -34,6 +38,7 @@ export interface Room {
   players: Map<string, Player>;
   baby: Baby | null;
   babySpawnTime: number;
+  totalDamageDealt: number;  // Total damage by all players to current baby
   clients: ClientConnection[];
   lastActivity: number;
 }
@@ -45,12 +50,11 @@ export interface JoinRequest {
 
 export interface ClickRequest {
   playerId: string;
-  damage?: number;
 }
 
 export type ServerEvent =
   | { type: 'init'; baby: Baby | null; players: Player[] }
   | { type: 'player-joined'; player: Player; players: Player[] }
-  | { type: 'player-left'; playerId: string; players: Player[] }
-  | { type: 'baby-damaged'; baby: Baby; attacker: Player }
-  | { type: 'baby-killed'; killer: Player; reward: number; newBaby: Baby; players: Player[] };
+  | { type: 'baby-damaged'; baby: Baby; attacker: Player; damage: number; xpGained: number }
+  | { type: 'baby-killed'; killer: Player; reward: number; newBaby: Baby; players: Player[]; bonusXp: number }
+  | { type: 'player-leveled-up'; player: Player; newLevel: number };

@@ -5,12 +5,16 @@ import {
   createRoom, 
   spawnBaby, 
   broadcast, 
+  createPlayer,
   validatePlayerName, 
   validateRoomId,
   updateRoomActivity,
-  cleanupEmptyRooms
+  cleanupEmptyRooms,
+  calculateXpToNextLevel,
+  calculateDamage,
+  calculateLevelUp
 } from './game';
-import type { Room, ClientConnection } from './types';
+import type { Room } from './types';
 
 // Game state
 const rooms = new Map<string, Room>();
@@ -59,6 +63,7 @@ const app = new Elysia()
       if (!room.baby) {
         room.baby = spawnBaby();
         room.babySpawnTime = Date.now();
+        room.totalDamageDealt = 0;
       }
       
       set.headers['Content-Type'] = 'text/event-stream';
@@ -70,8 +75,7 @@ const app = new Elysia()
       const encoder = new TextEncoder();
       const clientId = ++clientIdCounter;
       
-      const client: ClientConnection = { id: clientId, writer, encoder };
-      room.clients.push(client);
+      room.clients.push({ id: clientId, writer, encoder });
       
       // Send initial state
       const initEvent = {
@@ -93,8 +97,6 @@ const app = new Elysia()
       };
       
       request.signal.addEventListener('abort', cleanup);
-      
-      // Also cleanup on write errors
       writer.closed.catch(() => cleanup());
       
       return readable;
@@ -117,6 +119,7 @@ const app = new Elysia()
       if (!room.baby) {
         room.baby = spawnBaby();
         room.babySpawnTime = Date.now();
+        room.totalDamageDealt = 0;
       }
       
       // Try reconnect if playerId provided and player exists
@@ -134,17 +137,9 @@ const app = new Elysia()
       }
       
       // Create new player
-      const playerId = crypto.randomUUID();
-      const player = {
-        id: playerId,
-        name,
-        clicks: 0,
-        money: 0,
-        kills: 0,
-        joinedAt: Date.now()
-      };
+      const player = createPlayer(name);
+      room.players.set(player.id, player);
       
-      room.players.set(playerId, player);
       updateRoomActivity(room);
       
       broadcast(room, {
@@ -153,7 +148,7 @@ const app = new Elysia()
         players: Array.from(room.players.values())
       });
       
-      return { playerId, player, baby: room.baby };
+      return { playerId: player.id, player, baby: room.baby };
     } catch (error) {
       console.error('Join error:', error);
       return { error: error instanceof Error ? error.message : 'Failed to join' };
@@ -165,7 +160,7 @@ const app = new Elysia()
     })
   })
   
-  // Click baby with atomic operation
+  // Click baby with PvE progression mechanics
   .post('/api/room/:roomId/click', ({ params: { roomId }, body }) => {
     try {
       const validRoomId = validateRoomId(roomId);
@@ -175,7 +170,7 @@ const app = new Elysia()
         return { error: 'Room not found' };
       }
       
-      const { playerId, damage = 1 } = body;
+      const { playerId } = body;
       
       if (typeof playerId !== 'string') {
         return { error: 'Invalid player ID' };
@@ -190,19 +185,66 @@ const app = new Elysia()
         return { error: 'Baby already dead', baby: room.baby };
       }
       
-      // Apply damage atomically
+      // Calculate damage based on player level
+      const damage = player.damage;
+      
+      // Apply damage
       const actualDamage = Math.min(damage, room.baby.currentHp);
       player.clicks++;
+      player.totalDamage += actualDamage;
       room.baby.currentHp -= actualDamage;
+      room.totalDamageDealt += actualDamage;
+      
+      // Calculate XP gained
+      const xpGained = actualDamage * 5;
+      player.xp += xpGained;
+      
+      // Check for level up
+      const levelUpResult = calculateLevelUp(player.level, player.xp, player.xpToNextLevel);
+      
+      let leveledUp = false;
+      if (levelUpResult.levelsGained > 0) {
+        player.level = levelUpResult.newLevel;
+        player.xp = levelUpResult.newXp;
+        player.xpToNextLevel = levelUpResult.newXpToNext;
+        player.damage = calculateDamage(player.level);
+        leveledUp = true;
+        
+        // Notify about level up
+        broadcast(room, {
+          type: 'player-leveled-up',
+          player,
+          newLevel: player.level
+        });
+      }
       
       // Baby killed
       if (room.baby.currentHp <= 0) {
-        player.money += room.baby.reward;
         player.kills++;
+        
+        // Bonus XP for kill based on baby max HP
+        const bonusXp = Math.floor(room.baby.maxHp * 0.1);
+        player.xp += bonusXp;
+        
+        // Check for level up from bonus XP
+        const killLevelUpResult = calculateLevelUp(player.level, player.xp, player.xpToNextLevel);
+        if (killLevelUpResult.levelsGained > 0) {
+          player.level = killLevelUpResult.newLevel;
+          player.xp = killLevelUpResult.newXp;
+          player.xpToNextLevel = killLevelUpResult.newXpToNext;
+          player.damage = calculateDamage(player.level);
+          
+          broadcast(room, {
+            type: 'player-leveled-up',
+            player,
+            newLevel: player.level
+          });
+        }
         
         const killedBaby = room.baby;
         room.baby = spawnBaby();
         room.babySpawnTime = Date.now();
+        room.totalDamageDealt = 0;
         
         updateRoomActivity(room);
         
@@ -211,14 +253,19 @@ const app = new Elysia()
           killer: player,
           reward: killedBaby.reward,
           newBaby: room.baby,
-          players: Array.from(room.players.values())
+          players: Array.from(room.players.values()),
+          bonusXp
         });
         
         return { 
           killed: true, 
-          reward: killedBaby.reward, 
+          reward: killedBaby.reward,
+          bonusXp,
           player,
-          baby: room.baby 
+          baby: room.baby,
+          damage: actualDamage,
+          xpGained,
+          leveledUp
         };
       }
       
@@ -228,22 +275,30 @@ const app = new Elysia()
       broadcast(room, {
         type: 'baby-damaged',
         baby: room.baby,
-        attacker: player
+        attacker: player,
+        damage: actualDamage,
+        xpGained
       });
       
-      return { killed: false, baby: room.baby, player };
+      return { 
+        killed: false, 
+        baby: room.baby, 
+        player,
+        damage: actualDamage,
+        xpGained,
+        leveledUp
+      };
     } catch (error) {
       console.error('Click error:', error);
       return { error: error instanceof Error ? error.message : 'Click failed' };
     }
   }, {
     body: t.Object({
-      playerId: t.String(),
-      damage: t.Optional(t.Number({ minimum: 1, maximum: 100 }))
+      playerId: t.String()
     })
   })
   
-  // Leaderboard
+  // Leaderboard (by total damage dealt)
   .get('/api/room/:roomId/leaderboard', ({ params: { roomId } }) => {
     try {
       const validRoomId = validateRoomId(roomId);
@@ -256,7 +311,7 @@ const app = new Elysia()
       updateRoomActivity(room);
       
       return Array.from(room.players.values())
-        .sort((a, b) => b.money - a.money)
+        .sort((a, b) => b.totalDamage - a.totalDamage)
         .slice(0, 10);
     } catch (error) {
       console.error('Leaderboard error:', error);
@@ -264,6 +319,27 @@ const app = new Elysia()
     }
   })
   
+  // Get room stats
+  .get('/api/room/:roomId/stats', ({ params: { roomId } }) => {
+    try {
+      const validRoomId = validateRoomId(roomId);
+      const room = rooms.get(validRoomId);
+      
+      if (!room) {
+        return { error: 'Room not found' };
+      }
+      
+      return {
+        totalDamageDealt: room.totalDamageDealt,
+        playerCount: room.players.size,
+        baby: room.baby
+      };
+    } catch (error) {
+      console.error('Stats error:', error);
+      return { error: 'Failed to get stats' };
+    }
+  })
+  
   .listen(process.env.PORT || 3000);
 
-console.log(`🧟‍♀️ Бабы-Зомби сервер на порту ${app.server?.port}`);
+console.log(`🧟‍♀️ Бабы-Зомби PvE сервер на порту ${app.server?.port}`);

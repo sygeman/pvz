@@ -23,12 +23,19 @@ export interface Player {
   joinedAt: number;
 }
 
+export interface ClientConnection {
+  id: number;
+  writer: WritableStreamDefaultWriter<Uint8Array>;
+  encoder: TextEncoder;
+}
+
 export interface Room {
   id: string;
   players: Map<string, Player>;
   baby: Baby | null;
   babySpawnTime: number;
-  clients: WritableStreamDefaultWriter<string>[];
+  clients: ClientConnection[];
+  lastActivity: number;
 }
 
 export interface JoinRequest {
@@ -44,5 +51,6 @@ export interface ClickRequest {
 export type ServerEvent =
   | { type: 'init'; baby: Baby | null; players: Player[] }
   | { type: 'player-joined'; player: Player; players: Player[] }
+  | { type: 'player-left'; playerId: string; players: Player[] }
   | { type: 'baby-damaged'; baby: Baby; attacker: Player }
   | { type: 'baby-killed'; killer: Player; reward: number; newBaby: Baby; players: Player[] };

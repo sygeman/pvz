@@ -9,8 +9,10 @@
         <p>Привет, <strong>{{ savedSession.playerName }}</strong>!</p>
         <p>Комната: {{ savedSession.roomId }}</p>
         <div class="buttons">
-          <button @click="reconnect" class="btn-primary">Продолжить игру</button>
-          <button @click="clearSession" class="btn-secondary">Новая игра</button>
+          <button @click="reconnect" :disabled="isLoading" class="btn-primary">
+            {{ isLoading ? 'Подключение...' : 'Продолжить игру' }}
+          </button>
+          <button @click="clearSession" :disabled="isLoading" class="btn-secondary">Новая игра</button>
         </div>
       </div>
       
@@ -24,15 +26,16 @@
           placeholder="Твоё имя" 
           @keyup.enter="join"
           maxlength="20"
+          :disabled="isLoading"
         />
         
         <div class="room-info">
           <span>Комната: <strong>{{ roomId }}</strong></span>
-          <button @click="generateRoomId" class="btn-small" title="Сгенерировать новую">🔄</button>
+          <button @click="generateRoomId" :disabled="isLoading" class="btn-small" title="Сгенерировать новую">🔄</button>
         </div>
         
-        <button @click="join" :disabled="!playerName">
-          Играть
+        <button @click="join" :disabled="!playerName || isLoading">
+          {{ isLoading ? 'Подключение...' : 'Играть' }}
         </button>
         
         <p class="hint">Поделись URL чтобы пригласить друзей</p>
@@ -56,7 +59,7 @@
       
       <!-- Baby Target -->
       <div v-if="baby" class="baby-container" @click="clickBaby">
-        <div class="baby">
+        <div class="baby" :class="{ 'dead': baby.currentHp <= 0 }">
           <div class="emoji" :class="{ 'hit': hitEffect }">{{ baby.emoji }}</div>
           <div class="name">{{ baby.name }}</div>
           <div class="desc">{{ baby.desc }}</div>
@@ -64,16 +67,18 @@
           <div class="hp-bar">
             <div 
               class="hp-fill" 
-              :style="{ width: (baby.currentHp / baby.maxHp * 100) + '%' }"
+              :class="{ 'critical': baby.currentHp / baby.maxHp < 0.3 }"
+              :style="{ width: Math.max(0, baby.currentHp / baby.maxHp * 100) + '%' }"
             ></div>
           </div>
           
-          <div class="hp-text">{{ baby.currentHp }} / {{ baby.maxHp }} HP</div>
+          <div class="hp-text">{{ Math.max(0, baby.currentHp) }} / {{ baby.maxHp }} HP</div>
           
           <div class="reward">💰 {{ formatMoney(baby.reward) }}</div>
         </div>
         
-        <div class="click-hint">КЛИКАЙ БЫСТРЕЕ!</div>
+        <div class="click-hint" v-if="baby.currentHp > 0">КЛИКАЙ БЫСТРЕЕ!</div>
+        <div class="click-hint dead" v-else>БАБА УБИТА!</div>
       </div>
       
       <!-- Leaderboard -->
@@ -105,6 +110,11 @@
           {{ msg.text }}
         </div>
       </div>
+      
+      <!-- Connection Status -->
+      <div v-if="!sseConnected" class="connection-status reconnecting">
+        ⚠️ Переподключение... ({{ reconnectAttempt }})
+      </div>
     </div>
   </div>
 </template>
@@ -113,6 +123,9 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 
 const STORAGE_KEY = 'babies_zombies_session';
+const CLICK_COOLDOWN_MS = 50; // Min time between clicks
+const MAX_RECONNECT_ATTEMPTS = 10;
+const RECONNECT_BASE_DELAY = 1000;
 
 const playerName = ref('');
 const roomId = ref('');
@@ -127,14 +140,20 @@ const killFeed = ref([]);
 const hitEffect = ref(false);
 const savedSession = ref(null);
 const isInvited = ref(false);
+const isLoading = ref(false);
+const sseConnected = ref(false);
+const reconnectAttempt = ref(0);
 
 let eventSource = null;
+let reconnectTimeout = null;
+let lastClickTime = 0;
 
 const sortedPlayers = computed(() => {
   return [...players.value].sort((a, b) => b.money - a.money);
 });
 
 function formatMoney(m) {
+  if (typeof m !== 'number') return '0';
   return m.toLocaleString('ru-RU');
 }
 
@@ -146,7 +165,6 @@ function generateRoomId() {
   }
   roomId.value = result;
   
-  // Update URL without reloading
   const url = new URL(window.location.href);
   url.searchParams.set('room', result);
   window.history.replaceState({}, '', url);
@@ -155,8 +173,15 @@ function generateRoomId() {
 function copyLink() {
   const url = `${window.location.origin}/?room=${roomId.value}`;
   navigator.clipboard.writeText(url).then(() => {
+    showNotification('Ссылка скопирована!');
+  }).catch(() => {
     alert('Ссылка скопирована!');
   });
+}
+
+function showNotification(text) {
+  // Simple in-app notification instead of alert
+  addKillFeed(text);
 }
 
 // Load saved session or URL params on mount
@@ -164,19 +189,15 @@ onMounted(() => {
   const urlParams = new URLSearchParams(window.location.search);
   const urlRoom = urlParams.get('room');
   
-  // URL param has priority
   if (urlRoom && urlRoom.length >= 3) {
-    roomId.value = urlRoom.toUpperCase();
-    // Check if we have matching saved session
+    roomId.value = urlRoom.toUpperCase().replace(/[^A-Z0-9_-]/g, '');
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
         const session = JSON.parse(saved);
-        // If same room, use saved name
         if (session.roomId === roomId.value) {
           savedSession.value = session;
         } else {
-          // Different room - it's an invite
           isInvited.value = true;
         }
       } catch (e) {
@@ -184,11 +205,9 @@ onMounted(() => {
         isInvited.value = true;
       }
     } else {
-      // No saved session but has URL room = invite
       isInvited.value = true;
     }
   } else {
-    // No URL room, try localStorage
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
@@ -200,7 +219,6 @@ onMounted(() => {
         generateRoomId();
       }
     } else {
-      // Generate new room
       generateRoomId();
     }
   }
@@ -223,16 +241,30 @@ function clearSession() {
 }
 
 function exit() {
+  disconnectSSE();
+  connected.value = false;
+  playerId.value = null;
+  money.value = 0;
+  clicks.value = 0;
+  kills.value = 0;
+  baby.value = null;
+  players.value = [];
+  const url = new URL(window.location.href);
+  url.searchParams.delete('room');
+  window.history.replaceState({}, '', url);
+}
+
+function disconnectSSE() {
   if (eventSource) {
     eventSource.close();
     eventSource = null;
   }
-  connected.value = false;
-  playerId.value = null;
-  // Update URL to remove room focus
-  const url = new URL(window.location.href);
-  url.searchParams.delete('room');
-  window.history.replaceState({}, '', url);
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+  }
+  sseConnected.value = false;
+  reconnectAttempt.value = 0;
 }
 
 async function reconnect() {
@@ -242,7 +274,6 @@ async function reconnect() {
   playerName.value = savedSession.value.playerName;
   roomId.value = savedSession.value.roomId;
   
-  // Update URL
   const url = new URL(window.location.href);
   url.searchParams.set('room', roomId.value);
   window.history.replaceState({}, '', url);
@@ -251,9 +282,8 @@ async function reconnect() {
 }
 
 async function join() {
-  if (!playerName.value || !roomId.value) return;
+  if (!playerName.value || !roomId.value || isLoading.value) return;
   
-  // Update URL with room
   const url = new URL(window.location.href);
   url.searchParams.set('room', roomId.value);
   window.history.replaceState({}, '', url);
@@ -262,6 +292,8 @@ async function join() {
 }
 
 async function doJoin() {
+  isLoading.value = true;
+  
   try {
     const res = await fetch(`/api/room/${roomId.value}/join`, {
       method: 'POST',
@@ -272,12 +304,20 @@ async function doJoin() {
       })
     });
     
+    if (!res.ok) {
+      throw new Error(`HTTP error! status: ${res.status}`);
+    }
+    
     const data = await res.json();
     
+    if (data.error) {
+      throw new Error(data.error);
+    }
+    
     if (data.reconnected) {
-      money.value = data.player.money;
-      clicks.value = data.player.clicks;
-      kills.value = data.player.kills;
+      money.value = data.player.money || 0;
+      clicks.value = data.player.clicks || 0;
+      kills.value = data.player.kills || 0;
     } else {
       playerId.value = data.playerId;
       money.value = 0;
@@ -291,60 +331,118 @@ async function doJoin() {
     saveSession();
     connectSSE();
   } catch (e) {
-    alert('Ошибка подключения');
+    console.error('Join error:', e);
+    alert('Ошибка подключения: ' + (e.message || 'Неизвестная ошибка'));
+  } finally {
+    isLoading.value = false;
   }
 }
 
 function connectSSE() {
-  eventSource = new EventSource(`/api/room/${roomId.value}/events`);
+  disconnectSSE();
   
-  eventSource.onmessage = (e) => {
-    const data = JSON.parse(e.data);
-    handleEvent(data);
-  };
-  
-  eventSource.onerror = () => {
-    // Auto-reconnect will happen
-  };
+  try {
+    eventSource = new EventSource(`/api/room/${roomId.value}/events`);
+    sseConnected.value = true;
+    reconnectAttempt.value = 0;
+    
+    eventSource.onopen = () => {
+      sseConnected.value = true;
+      reconnectAttempt.value = 0;
+    };
+    
+    eventSource.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        handleEvent(data);
+      } catch (err) {
+        console.error('Failed to parse SSE message:', err);
+      }
+    };
+    
+    eventSource.onerror = () => {
+      sseConnected.value = false;
+      
+      if (reconnectAttempt.value < MAX_RECONNECT_ATTEMPTS) {
+        reconnectAttempt.value++;
+        const delay = Math.min(RECONNECT_BASE_DELAY * Math.pow(2, reconnectAttempt.value - 1), 30000);
+        
+        reconnectTimeout = setTimeout(() => {
+          if (connected.value) {
+            connectSSE();
+          }
+        }, delay);
+      } else {
+        alert('Соединение потеряно. Обновите страницу.');
+        exit();
+      }
+    };
+  } catch (e) {
+    console.error('SSE connection error:', e);
+    sseConnected.value = false;
+  }
 }
 
 function handleEvent(data) {
+  if (!data || !data.type) return;
+  
   switch(data.type) {
     case 'init':
       baby.value = data.baby;
-      players.value = data.players;
-      const me = data.players.find(p => p.id === playerId.value);
+      players.value = data.players || [];
+      const me = data.players?.find(p => p.id === playerId.value);
       if (me) {
-        money.value = me.money;
-        clicks.value = me.clicks;
-        kills.value = me.kills;
+        money.value = me.money || 0;
+        clicks.value = me.clicks || 0;
+        kills.value = me.kills || 0;
       }
       break;
       
     case 'player-joined':
-      players.value = data.players;
+      players.value = data.players || [];
       break;
       
     case 'baby-damaged':
-      baby.value = data.baby;
+      if (data.baby) {
+        baby.value = data.baby;
+      }
       break;
       
     case 'baby-killed':
-      baby.value = data.newBaby;
-      players.value = data.players;
-      
-      if (data.killer.id === playerId.value) {
-        money.value = data.killer.money;
-        kills.value = data.killer.kills;
+      if (data.newBaby) {
+        baby.value = data.newBaby;
+      }
+      if (data.players) {
+        players.value = data.players;
       }
       
-      addKillFeed(`${data.killer.name} убил бабу и получил ${formatMoney(data.reward)}₽!`);
+      if (data.killer?.id === playerId.value) {
+        money.value = data.killer.money || 0;
+        kills.value = data.killer.kills || 0;
+      }
+      
+      if (data.killer?.name) {
+        const reward = data.reward || 0;
+        addKillFeed(`${data.killer.name} убил бабу и получил ${formatMoney(reward)}₽! 💀`);
+      }
       break;
   }
 }
 
 async function clickBaby() {
   if (!baby.value || !playerId.value) return;
+  
+  // Rate limiting
+  const now = Date.now();
+  if (now - lastClickTime < CLICK_COOLDOWN_MS) {
+    return; // Ignore rapid clicks
+  }
+  lastClickTime = now;
+  
+  // Don't click dead babies
+  if (baby.value.currentHp <= 0) {
+    return;
+  }
   
   hitEffect.value = true;
   setTimeout(() => hitEffect.value = false, 100);
@@ -356,14 +454,27 @@ async function clickBaby() {
       body: JSON.stringify({ playerId: playerId.value, damage: 1 })
     });
     
+    if (!res.ok) {
+      throw new Error(`HTTP error! status: ${res.status}`);
+    }
+    
     const data = await res.json();
     
+    if (data.error) {
+      console.warn('Click error:', data.error);
+      return;
+    }
+    
     if (data.killed) {
-      money.value = data.player.money;
-      kills.value = data.player.kills;
-      baby.value = data.baby;
+      money.value = data.player?.money || money.value;
+      kills.value = data.player?.kills || kills.value;
+      if (data.baby) {
+        baby.value = data.baby;
+      }
     } else {
-      baby.value = data.baby;
+      if (data.baby) {
+        baby.value = data.baby;
+      }
     }
     
     clicks.value++;
@@ -373,7 +484,7 @@ async function clickBaby() {
 }
 
 function addKillFeed(text) {
-  const id = Date.now();
+  const id = Date.now() + Math.random();
   killFeed.value.unshift({ id, text });
   if (killFeed.value.length > 5) killFeed.value.pop();
   setTimeout(() => {
@@ -382,7 +493,7 @@ function addKillFeed(text) {
 }
 
 onUnmounted(() => {
-  if (eventSource) eventSource.close();
+  disconnectSSE();
 });
 </script>
 
@@ -459,8 +570,13 @@ onUnmounted(() => {
   color: #fff;
 }
 
-.saved-session button:hover {
+.saved-session button:hover:not(:disabled) {
   transform: translateY(-2px);
+}
+
+.saved-session button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .join-form {
@@ -508,6 +624,11 @@ onUnmounted(() => {
   color: #666;
 }
 
+.join-form input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .room-info {
   display: flex;
   align-items: center;
@@ -536,9 +657,14 @@ onUnmounted(() => {
   font-size: 0.9rem;
 }
 
-.btn-small:hover {
+.btn-small:hover:not(:disabled) {
   color: #fff;
   border-color: #fff;
+}
+
+.btn-small:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .hint {
@@ -580,7 +706,7 @@ header {
   margin-bottom: 20px;
 }
 
-.room-info {
+header .room-info {
   color: #888;
   margin-bottom: 10px;
   display: flex;
@@ -590,7 +716,7 @@ header {
   flex-wrap: wrap;
 }
 
-.room-info strong {
+header .room-info strong {
   color: #4ecdc4;
 }
 
@@ -636,10 +762,15 @@ header {
   padding: 40px;
   border-radius: 20px;
   border: 2px solid rgba(255,107,107,0.3);
-  transition: transform 0.1s;
+  transition: transform 0.1s, opacity 0.3s;
 }
 
-.baby-container:active .baby {
+.baby.dead {
+  opacity: 0.6;
+  border-color: #666;
+}
+
+.baby-container:active .baby:not(.dead) {
   transform: scale(0.95);
 }
 
@@ -654,14 +785,22 @@ header {
   transform: scale(1.2) rotate(-10deg);
 }
 
-.name {
+.baby.dead .emoji {
+  filter: grayscale(100%);
+}
+
+.baby .name {
   font-size: 2rem;
   font-weight: bold;
   color: #ff6b6b;
   margin-bottom: 10px;
 }
 
-.desc {
+.baby.dead .name {
+  color: #666;
+}
+
+.baby .desc {
   color: #888;
   margin-bottom: 20px;
 }
@@ -681,6 +820,16 @@ header {
   transition: width 0.1s;
 }
 
+.hp-fill.critical {
+  background: linear-gradient(90deg, #ff0000, #ff6b6b);
+  animation: pulse-critical 0.5s infinite;
+}
+
+@keyframes pulse-critical {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
 .hp-text {
   color: #888;
   font-size: 0.9rem;
@@ -698,6 +847,11 @@ header {
   font-size: 1.2rem;
   color: #4ecdc4;
   animation: pulse 1s infinite;
+}
+
+.click-hint.dead {
+  color: #666;
+  animation: none;
 }
 
 @keyframes pulse {
@@ -739,20 +893,20 @@ header {
   border: 1px solid #4ecdc4;
 }
 
-.rank {
+.player .rank {
   font-weight: bold;
   color: #888;
 }
 
-.name {
+.player .name {
   font-weight: 500;
 }
 
-.money {
+.player .money {
   color: #ffd700;
 }
 
-.kills {
+.player .kills {
   color: #ff6b6b;
 }
 
@@ -764,9 +918,10 @@ header {
   flex-direction: column;
   gap: 10px;
   pointer-events: none;
+  z-index: 100;
 }
 
-.message {
+.kill-feed .message {
   background: rgba(0,0,0,0.8);
   padding: 10px 20px;
   border-radius: 8px;
@@ -781,6 +936,23 @@ header {
 
 @keyframes fadeOut {
   to { opacity: 0; }
+}
+
+.connection-status {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.8);
+  color: #ffd700;
+  padding: 10px 20px;
+  border-radius: 20px;
+  font-weight: bold;
+  z-index: 100;
+}
+
+.connection-status.reconnecting {
+  animation: pulse 1s infinite;
 }
 
 @media (max-width: 600px) {
@@ -802,6 +974,16 @@ header {
   
   .saved-session .buttons {
     flex-direction: column;
+  }
+  
+  .kill-feed {
+    left: 10px;
+    right: 10px;
+    top: 10px;
+  }
+  
+  .kill-feed .message {
+    font-size: 0.9rem;
   }
 }
 </style>

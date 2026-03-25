@@ -159,11 +159,24 @@ onMounted(() => {
   const urlParams = new URLSearchParams(window.location.search);
   const urlRoom = urlParams.get('room');
   
-  // Try URL param first
-  if (urlRoom && urlRoom.length === 5) {
+  // URL param has priority
+  if (urlRoom && urlRoom.length >= 3) {
     roomId.value = urlRoom.toUpperCase();
+    // Check if we have matching saved session
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const session = JSON.parse(saved);
+        // If same room, use saved name
+        if (session.roomId === roomId.value) {
+          savedSession.value = session;
+        }
+      } catch (e) {
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    }
   } else {
-    // Try localStorage
+    // No URL room, try localStorage
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {

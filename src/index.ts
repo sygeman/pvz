@@ -12,7 +12,8 @@ import {
   cleanupEmptyRooms,
   calculateXpToNextLevel,
   calculateDamage,
-  calculateLevelUp
+  calculateLevelUp,
+  ValidationError
 } from './game';
 import type { Room } from './types';
 
@@ -34,13 +35,21 @@ const app = new Elysia()
   .use(cors())
   
   // Error handler
-  .onError(({ code, error, set }) => {
-    console.error(`Error ${code}:`, error);
-    if (code === 'VALIDATION') {
+  .onError(({ code, error, set, request }) => {
+    console.error(`[${new Date().toISOString()}] Error ${code}:`, error);
+    console.error(`  Path: ${request.method} ${request.url}`);
+    
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    
+    if (code === 'VALIDATION' || error instanceof ValidationError) {
       set.status = 400;
-      return { error: 'Invalid input', details: error.message };
+      return { error: 'Invalid input', details: errorMessage, code: 'VALIDATION_ERROR' };
     }
-    return { error: 'Internal server error' };
+    if (code === 'NOT_FOUND') {
+      set.status = 404;
+      return { error: 'Not found' };
+    }
+    return { error: 'Internal server error', code: 'INTERNAL_ERROR' };
   })
   
   // Health check
@@ -106,51 +115,46 @@ const app = new Elysia()
   })
   
   // Join room
-  .post('/api/room/:roomId/join', async ({ params: { roomId }, body }) => {
-    try {
-      const validRoomId = validateRoomId(roomId);
-      const room = getOrCreateRoom(validRoomId);
-      const name = validatePlayerName(body.name);
-      const existingId = body.playerId;
-      
-      // Spawn baby if none exists
-      if (!room.baby) {
-        room.baby = spawnBaby();
-        room.babySpawnTime = Date.now();
-        room.totalDamageDealt = 0;
-      }
-      
-      // Try reconnect if playerId provided and player exists
-      if (existingId && typeof existingId === 'string') {
-        const existingPlayer = room.players.get(existingId);
-        if (existingPlayer) {
-          updateRoomActivity(room);
-          return { 
-            playerId: existingId, 
-            player: existingPlayer, 
-            baby: room.baby, 
-            reconnected: true 
-          };
-        }
-      }
-      
-      // Create new player
-      const player = createPlayer(name);
-      room.players.set(player.id, player);
-      
-      updateRoomActivity(room);
-      
-      await broadcast(room, {
-        type: 'player-joined',
-        player,
-        players: Array.from(room.players.values())
-      });
-      
-      return { playerId: player.id, player, baby: room.baby };
-    } catch (error) {
-      console.error('Join error:', error);
-      return { error: error instanceof Error ? error.message : 'Failed to join' };
+  .post('/api/room/:roomId/join', async ({ params: { roomId }, body, set }) => {
+    const validRoomId = validateRoomId(roomId);
+    const room = getOrCreateRoom(validRoomId);
+    const name = validatePlayerName(body.name);
+    const existingId = body.playerId;
+    
+    // Spawn baby if none exists
+    if (!room.baby) {
+      room.baby = spawnBaby();
+      room.babySpawnTime = Date.now();
+      room.totalDamageDealt = 0;
     }
+    
+    // Try reconnect if playerId provided and player exists
+    if (existingId && typeof existingId === 'string') {
+      const existingPlayer = room.players.get(existingId);
+      if (existingPlayer) {
+        updateRoomActivity(room);
+        return { 
+          playerId: existingId, 
+          player: existingPlayer, 
+          baby: room.baby, 
+          reconnected: true 
+        };
+      }
+    }
+    
+    // Create new player
+    const player = createPlayer(name);
+    room.players.set(player.id, player);
+    
+    updateRoomActivity(room);
+    
+    await broadcast(room, {
+      type: 'player-joined',
+      player,
+      players: Array.from(room.players.values())
+    });
+    
+    return { playerId: player.id, player, baby: room.baby };
   }, {
     body: t.Object({
       name: t.String({ minLength: 1, maxLength: 20 }),

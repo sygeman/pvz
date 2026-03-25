@@ -151,31 +151,39 @@ export function cleanupEmptyRooms(rooms: Map<string, Room>): void {
   }
 }
 
+// Custom validation error class
+export class ValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ValidationError';
+  }
+}
+
 // Validate player name
 export function validatePlayerName(name: unknown): string {
   if (typeof name !== 'string') {
-    throw new Error('Name must be a string');
+    throw new ValidationError('Name must be a string');
   }
   const trimmed = name.trim();
   if (trimmed.length === 0) {
-    throw new Error('Name cannot be empty');
+    throw new ValidationError('Name cannot be empty');
   }
   if (trimmed.length > 20) {
-    throw new Error('Name too long (max 20 characters)');
+    throw new ValidationError('Name too long (max 20 characters)');
   }
   // Remove control characters and potential XSS
-  const sanitized = trimmed.replace(/[<>\"']/g, '');
+  const sanitized = trimmed.replace(/[<>"']/g, '');
   return sanitized || 'Игрок';
 }
 
 // Validate room ID
 export function validateRoomId(roomId: unknown): string {
   if (typeof roomId !== 'string') {
-    throw new Error('Invalid room ID');
+    throw new ValidationError('Invalid room ID');
   }
   const sanitized = roomId.replace(/[^a-zA-Z0-9_-]/g, '').toUpperCase();
   if (sanitized.length < 3 || sanitized.length > 20) {
-    throw new Error('Invalid room ID length');
+    throw new ValidationError('Invalid room ID length');
   }
   return sanitized;
 }

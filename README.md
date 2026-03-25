@@ -31,24 +31,25 @@ cd client && bun install && bun run build && cd ..
 bun run start
 ```
 
-## 🏗️ Деплой
+## 🏗️ Деплой на Railway
 
-### Railway (рекомендую)
+1. Форкни репозиторий или подключи GitHub к Railway
+2. Railway автоматически использует `Dockerfile` (Bun runtime)
+3. Статические файлы собираются при сборке образа
+4. Health check на `/api/health`
 
+Через CLI:
 ```bash
-railway init
+railway login
+railway link
 railway up
 ```
 
-### Docker
+### Docker локально
 
-```dockerfile
-FROM oven/bun:latest
-WORKDIR /app
-COPY . .
-RUN cd client && bun install && bun run build
-EXPOSE 3000
-CMD ["bun", "run", "start"]
+```bash
+docker build -t kladochnik .
+docker run -p 3000:3000 kladochnik
 ```
 
 ## 🛠️ Технологии

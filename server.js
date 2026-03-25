@@ -4,144 +4,183 @@ import { serve } from '@hono/node-server';
 
 const app = new Hono();
 
-// In-memory storage (replace with DB in production)
-const users = new Map();
-const sessions = new Map();
-const games = new Map();
+// Game state
+const rooms = new Map();
+const BABY_TYPES = [
+  { id: 'galya', name: 'Тётя Галя', hp: 10, reward: 100, emoji: '👵', desc: '50 заказов, 1 чехол' },
+  { id: 'babushka', name: 'Бабушка', hp: 15, reward: 150, emoji: '👵', desc: '30 пар тапочек' },
+  { id: 'mamochka', name: 'Мамочка', hp: 20, reward: 200, emoji: '👩‍🍼', desc: '25 позиций, ничего не взяла' },
+  { id: 'shopogolik', name: 'Шопоголик', hp: 25, reward: 300, emoji: '💅', desc: '40 позиций по акциям' },
+  { id: 'mega', name: 'МЕГА-БАБА', hp: 100, reward: 1000, emoji: '🧟‍♀️', desc: 'BOSS: 100 заказов!' }
+];
 
-// GitHub OAuth config
-const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || '';
-const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || '';
-const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
+function createRoom(roomId) {
+  return {
+    id: roomId,
+    players: new Map(),
+    baby: null,
+    babySpawnTime: 0,
+    clients: []
+  };
+}
+
+function spawnBaby() {
+  const type = BABY_TYPES[Math.floor(Math.random() * BABY_TYPES.length)];
+  return {
+    ...type,
+    currentHp: type.hp,
+    maxHp: type.hp,
+    id: Date.now()
+  };
+}
+
+function getOrCreateRoom(roomId) {
+  if (!rooms.has(roomId)) {
+    rooms.set(roomId, createRoom(roomId));
+  }
+  return rooms.get(roomId);
+}
+
+function broadcast(room, data) {
+  const dead = [];
+  room.clients.forEach(client => {
+    try {
+      client.write(`data: ${JSON.stringify(data)}\n\n`);
+    } catch {
+      dead.push(client);
+    }
+  });
+  room.clients = room.clients.filter(c => !dead.includes(c));
+}
 
 // Static files
 app.use('/*', serveStatic({ root: './client/dist' }));
 
-// GitHub OAuth login
-app.get('/api/auth/github', (c) => {
-  const state = crypto.randomUUID();
-  const redirectUri = `${BASE_URL}/api/auth/github/callback`;
-  const githubUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=user:email`;
+// SSE endpoint
+app.get('/api/room/:roomId/events', (c) => {
+  const roomId = c.req.param('roomId');
+  const room = getOrCreateRoom(roomId);
   
-  return c.redirect(githubUrl);
+  // Spawn baby if none exists
+  if (!room.baby) {
+    room.baby = spawnBaby();
+    room.babySpawnTime = Date.now();
+  }
+  
+  c.header('Content-Type', 'text/event-stream');
+  c.header('Cache-Control', 'no-cache');
+  c.header('Connection', 'keep-alive');
+  
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  
+  room.clients.push(writer);
+  
+  // Send initial state
+  writer.write(`data: ${JSON.stringify({
+    type: 'init',
+    baby: room.baby,
+    players: Array.from(room.players.values())
+  })}\n\n`);
+  
+  c.req.raw.signal.addEventListener('abort', () => {
+    room.clients = room.clients.filter(c => c !== writer);
+    writer.close();
+  });
+  
+  return c.body(readable);
 });
 
-// GitHub OAuth callback
-app.get('/api/auth/github/callback', async (c) => {
-  const code = c.req.query('code');
-  const state = c.req.query('state');
+// Join room
+app.post('/api/room/:roomId/join', async (c) => {
+  const roomId = c.req.param('roomId');
+  const { name } = await c.req.json();
+  const room = getOrCreateRoom(roomId);
   
-  if (!code) {
-    return c.json({ error: 'No code provided' }, 400);
-  }
-  
-  // Exchange code for access token
-  const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
-    method: 'POST',
-    headers: {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      client_id: GITHUB_CLIENT_ID,
-      client_secret: GITHUB_CLIENT_SECRET,
-      code,
-    }),
-  });
-  
-  const tokenData = await tokenRes.json();
-  
-  if (!tokenData.access_token) {
-    return c.json({ error: 'Failed to get access token' }, 400);
-  }
-  
-  // Get user info from GitHub
-  const userRes = await fetch('https://api.github.com/user', {
-    headers: {
-      'Authorization': `Bearer ${tokenData.access_token}`,
-      'Accept': 'application/vnd.github.v3+json',
-    },
-  });
-  
-  const githubUser = await userRes.json();
-  
-  // Create or update user
-  const user = {
-    id: githubUser.id,
-    login: githubUser.login,
-    name: githubUser.name || githubUser.login,
-    avatar: githubUser.avatar_url,
-    createdAt: Date.now(),
+  const playerId = crypto.randomUUID();
+  const player = {
+    id: playerId,
+    name: name || 'Игрок',
+    clicks: 0,
+    money: 0,
+    kills: 0,
+    joinedAt: Date.now()
   };
   
-  users.set(githubUser.id, user);
+  room.players.set(playerId, player);
   
-  // Create session
-  const sessionId = crypto.randomUUID();
-  sessions.set(sessionId, { userId: user.id, createdAt: Date.now() });
+  broadcast(room, {
+    type: 'player-joined',
+    player,
+    players: Array.from(room.players.values())
+  });
   
-  // Redirect to game with session
-  return c.redirect(`/?session=${sessionId}`);
+  return c.json({ playerId, player, baby: room.baby });
 });
 
-// Get current user
-app.get('/api/me', (c) => {
-  const sessionId = c.req.header('X-Session-Id') || c.req.query('session');
-  const session = sessions.get(sessionId);
+// Click baby
+app.post('/api/room/:roomId/click', async (c) => {
+  const roomId = c.req.param('roomId');
+  const { playerId, damage = 1 } = await c.req.json();
+  const room = getOrCreateRoom(roomId);
   
-  if (!session) {
-    return c.json({ error: 'Not authenticated' }, 401);
+  const player = room.players.get(playerId);
+  if (!player || !room.baby) {
+    return c.json({ error: 'Invalid' }, 400);
   }
   
-  const user = users.get(session.userId);
-  if (!user) {
-    return c.json({ error: 'User not found' }, 404);
+  player.clicks++;
+  room.baby.currentHp -= damage;
+  
+  // Baby killed
+  if (room.baby.currentHp <= 0) {
+    player.money += room.baby.reward;
+    player.kills++;
+    
+    const killedBaby = room.baby;
+    room.baby = spawnBaby();
+    room.babySpawnTime = Date.now();
+    
+    broadcast(room, {
+      type: 'baby-killed',
+      killer: player,
+      reward: killedBaby.reward,
+      newBaby: room.baby,
+      players: Array.from(room.players.values())
+    });
+    
+    return c.json({ 
+      killed: true, 
+      reward: killedBaby.reward, 
+      player,
+      baby: room.baby 
+    });
   }
   
-  return c.json(user);
+  broadcast(room, {
+    type: 'baby-damaged',
+    baby: room.baby,
+    attacker: player
+  });
+  
+  return c.json({ killed: false, baby: room.baby, player });
 });
 
-// Logout
-app.post('/api/logout', (c) => {
-  const sessionId = c.req.header('X-Session-Id');
-  if (sessionId) {
-    sessions.delete(sessionId);
-  }
-  return c.json({ success: true });
-});
-
-// Save game
-app.post('/api/game/save', async (c) => {
-  const sessionId = c.req.header('X-Session-Id');
-  const session = sessions.get(sessionId);
+// Leaderboard
+app.get('/api/room/:roomId/leaderboard', (c) => {
+  const roomId = c.req.param('roomId');
+  const room = getOrCreateRoom(roomId);
   
-  if (!session) {
-    return c.json({ error: 'Not authenticated' }, 401);
-  }
+  const sorted = Array.from(room.players.values())
+    .sort((a, b) => b.money - a.money)
+    .slice(0, 10);
   
-  const data = await c.req.json();
-  games.set(session.userId, { ...data, savedAt: Date.now() });
-  
-  return c.json({ success: true });
-});
-
-// Load game
-app.get('/api/game/load', (c) => {
-  const sessionId = c.req.header('X-Session-Id');
-  const session = sessions.get(sessionId);
-  
-  if (!session) {
-    return c.json({ error: 'Not authenticated' }, 401);
-  }
-  
-  const game = games.get(session.userId);
-  return c.json(game || null);
+  return c.json(sorted);
 });
 
 // Health check
-app.get('/api/health', (c) => c.json({ status: 'ok', bun: true }));
+app.get('/api/health', (c) => c.json({ ok: true }));
 
 const port = process.env.PORT || 3000;
-console.log(`Server running at http://localhost:${port}`);
-
+console.log(`Clicker server on port ${port}`);
 serve({ fetch: app.fetch, port });

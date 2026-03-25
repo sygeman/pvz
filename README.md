@@ -1,6 +1,23 @@
-# КЛАДОВОЧНИК 2.0
+# 🧟‍♀️ БАБЫ-ЗОМБИ — Мультиплеер Кликер
 
-Игра про ПВЗ и баб-зомби на Bun + Vue 3 + GitHub OAuth.
+Кликай по бабам-шопоголикам, зарабатывай деньги, соревнуйся с друзьями.
+
+## 🎮 Как играть
+
+1. Зайди: `https://твой-сайт.com`
+2. Введи имя и название комнаты
+3. КЛИКАЙ ПО БАБЕ БЫСТРЕЕ!
+4. Кто убьёт — получит деньги
+
+## 🧟‍♀️ Типы баб
+
+| Баба | HP | Награда | Особенность |
+|------|-----|---------|-------------|
+| Тётя Галя | 10 | 100₽ | Классика |
+| Бабушка | 15 | 150₽ | Много тапочек |
+| Мамочка | 20 | 200₽ | Ничего не берёт |
+| Шопоголик | 25 | 300₽ | Любит акции |
+| **МЕГА-БАБА** | 100 | 1000₽ | BOSS! |
 
 ## 🚀 Запуск
 
@@ -8,73 +25,45 @@
 # Установи Bun
 curl -fsSL https://bun.sh/install | bash
 
-# Клонируй
-git clone https://github.com/sygeman/pvz.git
-cd pvz
-
-# Установи зависимости
+# Запусти
 bun install
-cd client && bun install && cd ..
-
-# Собери клиент
-bun run build
-
-# Запусти сервер
+cd client && bun install && bun run build && cd ..
 bun run start
 ```
 
-## ⚙️ Настройка GitHub OAuth
+## 🏗️ Деплой
 
-1. GitHub → Settings → Developer settings → OAuth Apps → New OAuth App
-2. Application name: `Кладовочник`
-3. Homepage URL: `http://localhost:3000`
-4. Authorization callback URL: `http://localhost:3000/api/auth/github/callback`
-5. Создай файл `.env`:
+### Railway (рекомендую)
 
-```env
-GITHUB_CLIENT_ID=your_client_id
-GITHUB_CLIENT_SECRET=your_client_secret
-BASE_URL=http://localhost:3000
-PORT=3000
+```bash
+railway init
+railway up
 ```
 
-## 📁 Структура
+### Docker
 
-```
-├── server.js           # Bun сервер (Hono)
-├── package.json
-├── client/
-│   ├── package.json
-│   ├── vite.config.js
-│   ├── index.html
-│   └── src/
-│       ├── main.js
-│       ├── App.vue
-│       ├── store.js      # Pinia store
-│       ├── style.css
-│       └── components/
-│           ├── AuthView.vue
-│           ├── GameView.vue
-│           ├── MarketView.vue
-│           ├── StoragesView.vue
-│           ├── EventsView.vue
-│           ├── PvzModal.vue
-│           └── StatCard.vue
+```dockerfile
+FROM oven/bun:latest
+WORKDIR /app
+COPY . .
+RUN cd client && bun install && bun run build
+EXPOSE 3000
+CMD ["bun", "run", "start"]
 ```
 
 ## 🛠️ Технологии
 
 - **Backend**: Bun + Hono
-- **Frontend**: Vue 3 + Pinia + Vite
-- **Auth**: GitHub OAuth
-- **State**: Pinia (клиент) + in-memory (сервер)
+- **Frontend**: Vue 3 (Single File Component)
+- **Multiplayer**: Server-Sent Events (SSE)
+- **Realtime**: Клики синхронизируются между игроками
 
 ## 📝 Фичи
 
-- Авторизация через GitHub
-- Сохранение прогресса на сервере
-- Игра с любого устройства
-- Бабы-зомби с уникальными атаками
+- ⚡ Мгновенная синхронизация кликов
+- 🏆 Топ игроков в реальном времени
+- 💬 Kill feed (кто убил бабу)
+- 📱 Работает на телефоне
 
 ---
 

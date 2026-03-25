@@ -97,6 +97,12 @@ app.post('/api/room/:roomId/join', async (c) => {
   const { name, playerId: existingId } = await c.req.json();
   const room = getOrCreateRoom(roomId);
   
+  // Spawn baby if none exists
+  if (!room.baby) {
+    room.baby = spawnBaby();
+    room.babySpawnTime = Date.now();
+  }
+  
   // Try reconnect if playerId provided
   if (existingId && room.players.has(existingId)) {
     const player = room.players.get(existingId);

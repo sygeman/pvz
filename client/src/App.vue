@@ -5,7 +5,16 @@
       <h1>🧟‍♀️ БАБЫ-ЗОМБИ</h1>
       <p>Мультиплеер кликер</p>
       
-      <div class="join-form">
+      <div v-if="savedSession" class="saved-session">
+        <p>Привет, <strong>{{ savedSession.playerName }}</strong>!</p>
+        <p>Комната: {{ savedSession.roomId }}</p>
+        <div class="buttons">
+          <button @click="reconnect" class="btn-primary">Продолжить игру</button>
+          <button @click="clearSession" class="btn-secondary">Новая игра</button>
+        </div>
+      </div>
+      
+      <div v-else class="join-form">
         <input 
           v-model="playerName" 
           placeholder="Твоё имя" 
@@ -28,7 +37,10 @@
     <!-- Game -->
     <div v-else class="game">
       <header>
-        <div class="room-info">Комната: {{ roomId }}</div>
+        <div class="room-info">
+          Комната: {{ roomId }}
+          <button @click="exit" class="exit-btn">Выйти</button>
+        </div>
         <div class="stats">
           <div class="stat">💰 {{ formatMoney(money) }}</div>
           <div class="stat">🖱️ {{ clicks }}</div>
@@ -92,7 +104,9 @@
 </template>
 
 <script setup>
-import { ref, computed, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
+
+const STORAGE_KEY = 'babies_zombies_session';
 
 const playerName = ref('');
 const roomId = ref('default');
@@ -105,6 +119,7 @@ const baby = ref(null);
 const players = ref([]);
 const killFeed = ref([]);
 const hitEffect = ref(false);
+const savedSession = ref(null);
 
 let eventSource = null;
 
@@ -114,6 +129,86 @@ const sortedPlayers = computed(() => {
 
 function formatMoney(m) {
   return m.toLocaleString('ru-RU');
+}
+
+// Load saved session on mount
+onMounted(() => {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved) {
+    try {
+      savedSession.value = JSON.parse(saved);
+    } catch (e) {
+      localStorage.removeItem(STORAGE_KEY);
+    }
+  }
+});
+
+function saveSession() {
+  if (playerId.value && playerName.value && roomId.value) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      playerId: playerId.value,
+      playerName: playerName.value,
+      roomId: roomId.value
+    }));
+  }
+}
+
+function clearSession() {
+  localStorage.removeItem(STORAGE_KEY);
+  savedSession.value = null;
+}
+
+function exit() {
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+  connected.value = false;
+  playerId.value = null;
+  // Don't clear localStorage — allow reconnect
+}
+
+async function reconnect() {
+  if (!savedSession.value) return;
+  
+  playerId.value = savedSession.value.playerId;
+  playerName.value = savedSession.value.playerName;
+  roomId.value = savedSession.value.roomId;
+  
+  try {
+    const res = await fetch(`/api/room/${roomId.value}/join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        name: playerName.value,
+        playerId: playerId.value 
+      })
+    });
+    
+    const data = await res.json();
+    
+    if (data.reconnected) {
+      // Restore stats
+      money.value = data.player.money;
+      clicks.value = data.player.clicks;
+      kills.value = data.player.kills;
+    } else {
+      // New player ID assigned
+      playerId.value = data.playerId;
+      money.value = 0;
+      clicks.value = 0;
+      kills.value = 0;
+    }
+    
+    baby.value = data.baby;
+    connected.value = true;
+    
+    saveSession();
+    connectSSE();
+  } catch (e) {
+    alert('Ошибка подключения');
+    clearSession();
+  }
 }
 
 async function join() {
@@ -135,7 +230,7 @@ async function join() {
     
     connected.value = true;
     
-    // Connect SSE
+    saveSession();
     connectSSE();
   } catch (e) {
     alert('Ошибка подключения');
@@ -149,6 +244,10 @@ function connectSSE() {
     const data = JSON.parse(e.data);
     handleEvent(data);
   };
+  
+  eventSource.onerror = () => {
+    // Auto-reconnect will happen
+  };
 }
 
 function handleEvent(data) {
@@ -156,6 +255,13 @@ function handleEvent(data) {
     case 'init':
       baby.value = data.baby;
       players.value = data.players;
+      // Update our stats from server
+      const me = data.players.find(p => p.id === playerId.value);
+      if (me) {
+        money.value = me.money;
+        clicks.value = me.clicks;
+        kills.value = me.kills;
+      }
       break;
       
     case 'player-joined':
@@ -181,7 +287,7 @@ function handleEvent(data) {
 }
 
 async function clickBaby() {
-  if (!baby.value) return;
+  if (!baby.value || !playerId.value) return;
   
   hitEffect.value = true;
   setTimeout(() => hitEffect.value = false, 100);
@@ -259,6 +365,47 @@ onUnmounted(() => {
   margin-bottom: 40px;
 }
 
+.saved-session {
+  background: rgba(255,255,255,0.1);
+  padding: 30px;
+  border-radius: 15px;
+  margin-bottom: 20px;
+}
+
+.saved-session p {
+  margin-bottom: 10px;
+}
+
+.saved-session .buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.saved-session button {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  cursor: pointer;
+  font-weight: bold;
+  transition: all 0.3s;
+}
+
+.btn-primary {
+  background: #ff6b6b;
+  color: #fff;
+}
+
+.btn-secondary {
+  background: #666;
+  color: #fff;
+}
+
+.saved-session button:hover {
+  transform: translateY(-2px);
+}
+
 .join-form {
   display: flex;
   flex-direction: column;
@@ -316,6 +463,25 @@ header {
 .room-info {
   color: #888;
   margin-bottom: 10px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 15px;
+}
+
+.exit-btn {
+  background: transparent;
+  border: 1px solid #666;
+  color: #888;
+  padding: 5px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.exit-btn:hover {
+  color: #fff;
+  border-color: #fff;
 }
 
 .stats {
@@ -507,6 +673,10 @@ header {
   
   .stat {
     font-size: 1.2rem;
+  }
+  
+  .saved-session .buttons {
+    flex-direction: column;
   }
 }
 </style>

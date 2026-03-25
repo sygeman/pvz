@@ -94,8 +94,14 @@ app.get('/api/room/:roomId/events', (c) => {
 // Join room
 app.post('/api/room/:roomId/join', async (c) => {
   const roomId = c.req.param('roomId');
-  const { name } = await c.req.json();
+  const { name, playerId: existingId } = await c.req.json();
   const room = getOrCreateRoom(roomId);
+  
+  // Try reconnect if playerId provided
+  if (existingId && room.players.has(existingId)) {
+    const player = room.players.get(existingId);
+    return c.json({ playerId: existingId, player, baby: room.baby, reconnected: true });
+  }
   
   const playerId = crypto.randomUUID();
   const player = {

@@ -15,6 +15,10 @@
       </div>
       
       <div v-else class="join-form">
+        <div v-if="isInvited" class="invite-banner">
+          <p>🎮 Тебя пригласили в комнату <strong>{{ roomId }}</strong>!</p>
+        </div>
+        
         <input 
           v-model="playerName" 
           placeholder="Твоё имя" 
@@ -122,6 +126,7 @@ const players = ref([]);
 const killFeed = ref([]);
 const hitEffect = ref(false);
 const savedSession = ref(null);
+const isInvited = ref(false);
 
 let eventSource = null;
 
@@ -170,10 +175,17 @@ onMounted(() => {
         // If same room, use saved name
         if (session.roomId === roomId.value) {
           savedSession.value = session;
+        } else {
+          // Different room - it's an invite
+          isInvited.value = true;
         }
       } catch (e) {
         localStorage.removeItem(STORAGE_KEY);
+        isInvited.value = true;
       }
+    } else {
+      // No saved session but has URL room = invite
+      isInvited.value = true;
     }
   } else {
     // No URL room, try localStorage
@@ -457,6 +469,25 @@ onUnmounted(() => {
   gap: 15px;
   width: 100%;
   max-width: 300px;
+}
+
+.invite-banner {
+  background: rgba(78, 205, 196, 0.2);
+  border: 1px solid #4ecdc4;
+  padding: 15px;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.invite-banner p {
+  color: #4ecdc4;
+  margin: 0;
+}
+
+.invite-banner strong {
+  color: #fff;
+  font-family: monospace;
+  font-size: 1.2rem;
 }
 
 .join-form input {

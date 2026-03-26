@@ -160,7 +160,7 @@
       </div>
       
       <!-- Connection Status -->
-      <div v-if="!sseConnected" class="connection-status reconnecting">
+      <div v-if="!wsConnected" class="connection-status reconnecting">
         ⚠️ Переподключение... ({{ reconnectAttempt }})
       </div>
     </div>
@@ -174,6 +174,7 @@ const STORAGE_KEY = 'babies_zombies_session';
 const CLICK_COOLDOWN_MS = 50;
 const MAX_RECONNECT_ATTEMPTS = 10;
 const RECONNECT_BASE_DELAY = 1000;
+const WS_PING_INTERVAL = 15000; // Send pong every 15s
 
 const playerName = ref('');
 const roomId = ref('');
@@ -199,7 +200,7 @@ const hitEffect = ref(false);
 const savedSession = ref(null);
 const isInvited = ref(false);
 const isLoading = ref(false);
-const sseConnected = ref(false);
+const wsConnected = ref(false);
 const reconnectAttempt = ref(0);
 const showDamagePopup = ref(false);
 const showLevelUp = ref(false);
@@ -207,8 +208,9 @@ const lastDamage = ref(0);
 const lastXpGained = ref(0);
 const lastKillBonus = ref(0);
 
-let eventSource = null;
+let ws = null;
 let reconnectTimeout = null;
+let pingInterval = null;
 let lastClickTime = 0;
 let damagePopupTimeout = null;
 let levelUpTimeout = null;
@@ -305,7 +307,7 @@ function clearSession() {
 }
 
 function exit() {
-  disconnectSSE();
+  disconnectWS();
   connected.value = false;
   playerId.value = null;
   level.value = 1;
@@ -322,16 +324,20 @@ function exit() {
   window.history.replaceState({}, '', url);
 }
 
-function disconnectSSE() {
-  if (eventSource) {
-    eventSource.close();
-    eventSource = null;
+function disconnectWS() {
+  if (ws) {
+    ws.close();
+    ws = null;
   }
   if (reconnectTimeout) {
     clearTimeout(reconnectTimeout);
     reconnectTimeout = null;
   }
-  sseConnected.value = false;
+  if (pingInterval) {
+    clearInterval(pingInterval);
+    pingInterval = null;
+  }
+  wsConnected.value = false;
   reconnectAttempt.value = 0;
 }
 
@@ -407,7 +413,7 @@ async function doJoin() {
     connected.value = true;
     
     saveSession();
-    connectSSE();
+    connectWS();
   } catch (e) {
     console.error('Join error:', e);
     alert('Ошибка подключения: ' + (e.message || 'Неизвестная ошибка'));
@@ -416,48 +422,72 @@ async function doJoin() {
   }
 }
 
-function connectSSE() {
-  disconnectSSE();
+function connectWS() {
+  disconnectWS();
+  
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${wsProtocol}//${window.location.host}/ws/room/${roomId.value}`;
   
   try {
-    eventSource = new EventSource(`/api/room/${roomId.value}/events`);
-    sseConnected.value = true;
-    reconnectAttempt.value = 0;
+    ws = new WebSocket(wsUrl);
     
-    eventSource.onopen = () => {
-      sseConnected.value = true;
+    ws.onopen = () => {
+      wsConnected.value = true;
       reconnectAttempt.value = 0;
+      
+      // Send join message via WS
+      ws.send(JSON.stringify({
+        type: 'join',
+        name: playerName.value,
+        playerId: playerId.value
+      }));
+      
+      // Start ping interval
+      pingInterval = setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'pong' }));
+        }
+      }, WS_PING_INTERVAL);
     };
     
-    eventSource.onmessage = (e) => {
+    ws.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data);
         handleEvent(data);
       } catch (err) {
-        console.error('Failed to parse SSE message:', err);
+        console.error('Failed to parse WS message:', err);
       }
     };
     
-    eventSource.onerror = () => {
-      sseConnected.value = false;
+    ws.onclose = () => {
+      wsConnected.value = false;
+      if (pingInterval) {
+        clearInterval(pingInterval);
+        pingInterval = null;
+      }
       
-      if (reconnectAttempt.value < MAX_RECONNECT_ATTEMPTS) {
+      if (connected.value && reconnectAttempt.value < MAX_RECONNECT_ATTEMPTS) {
         reconnectAttempt.value++;
         const delay = Math.min(RECONNECT_BASE_DELAY * Math.pow(2, reconnectAttempt.value - 1), 30000);
         
         reconnectTimeout = setTimeout(() => {
           if (connected.value) {
-            connectSSE();
+            connectWS();
           }
         }, delay);
-      } else {
+      } else if (reconnectAttempt.value >= MAX_RECONNECT_ATTEMPTS) {
         alert('Соединение потеряно. Обновите страницу.');
         exit();
       }
     };
+    
+    ws.onerror = (e) => {
+      console.error('WebSocket error:', e);
+      wsConnected.value = false;
+    };
   } catch (e) {
-    console.error('SSE connection error:', e);
-    sseConnected.value = false;
+    console.error('WS connection error:', e);
+    wsConnected.value = false;
   }
 }
 
@@ -477,6 +507,22 @@ function handleEvent(data) {
         totalDamage.value = me.totalDamage || 0;
         clicks.value = me.clicks || 0;
         kills.value = me.kills || 0;
+      }
+      break;
+      
+    case 'joined':
+      if (data.player) {
+        playerId.value = data.playerId;
+        level.value = data.player.level || 1;
+        xp.value = data.player.xp || 0;
+        xpToNext.value = data.player.xpToNextLevel || 100;
+        damage.value = data.player.damage || 1;
+        totalDamage.value = data.player.totalDamage || 0;
+        clicks.value = data.player.clicks || 0;
+        kills.value = data.player.kills || 0;
+      }
+      if (data.baby) {
+        baby.value = data.baby;
       }
       break;
       
@@ -525,6 +571,49 @@ function handleEvent(data) {
         addKillFeed(`⭐ ${data.player.name} достиг уровня ${data.newLevel}!`, 'levelup');
       }
       break;
+      
+    case 'click-result':
+      // Update local stats from click result
+      if (data.killed) {
+        totalDamage.value = data.player?.totalDamage || totalDamage.value;
+        kills.value = data.player?.kills || kills.value;
+        lastKillBonus.value = data.bonusXp || 0;
+        if (data.baby) {
+          baby.value = data.baby;
+        }
+      } else {
+        if (data.baby) {
+          baby.value = data.baby;
+        }
+      }
+      
+      // Show damage popup
+      lastDamage.value = data.damage || 0;
+      lastXpGained.value = data.xpGained || 0;
+      showDamagePopup.value = true;
+      if (damagePopupTimeout) clearTimeout(damagePopupTimeout);
+      damagePopupTimeout = setTimeout(() => {
+        showDamagePopup.value = false;
+      }, 1000);
+      
+      // Update XP and check for level up
+      if (data.player) {
+        xp.value = data.player.xp;
+        xpToNext.value = data.player.xpToNextLevel;
+        if (data.leveledUp) {
+          level.value = data.player.level;
+          damage.value = data.player.damage;
+          showLevelUpNotification();
+        }
+      }
+      break;
+      
+    case 'ping':
+      // Server ping - respond with pong
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'pong' }));
+      }
+      break;
   }
 }
 
@@ -537,7 +626,7 @@ function showLevelUpNotification() {
 }
 
 async function clickBaby() {
-  if (!baby.value || !playerId.value) return;
+  if (!baby.value || !playerId.value || !ws) return;
   
   const now = Date.now();
   if (now - lastClickTime < CLICK_COOLDOWN_MS) {
@@ -552,61 +641,13 @@ async function clickBaby() {
   hitEffect.value = true;
   setTimeout(() => hitEffect.value = false, 100);
   
-  try {
-    const res = await fetch(`/api/room/${roomId.value}/click`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ playerId: playerId.value })
-    });
-    
-    if (!res.ok) {
-      throw new Error(`HTTP error! status: ${res.status}`);
-    }
-    
-    const data = await res.json();
-    
-    if (data.error) {
-      console.warn('Click error:', data.error);
-      return;
-    }
-    
-    // Update local stats
-    if (data.killed) {
-      totalDamage.value = data.player?.totalDamage || totalDamage.value;
-      kills.value = data.player?.kills || kills.value;
-      lastKillBonus.value = data.bonusXp || 0;
-      if (data.baby) {
-        baby.value = data.baby;
-      }
-    } else {
-      if (data.baby) {
-        baby.value = data.baby;
-      }
-    }
-    
-    // Show damage popup
-    lastDamage.value = data.damage || 0;
-    lastXpGained.value = data.xpGained || 0;
-    showDamagePopup.value = true;
-    if (damagePopupTimeout) clearTimeout(damagePopupTimeout);
-    damagePopupTimeout = setTimeout(() => {
-      showDamagePopup.value = false;
-    }, 1000);
-    
-    // Update XP and check for level up
-    if (data.player) {
-      xp.value = data.player.xp;
-      xpToNext.value = data.player.xpToNextLevel;
-      if (data.leveledUp) {
-        level.value = data.player.level;
-        damage.value = data.player.damage;
-        showLevelUpNotification();
-      }
-    }
-    
+  // Send click via WebSocket
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'click',
+      playerId: playerId.value
+    }));
     clicks.value++;
-  } catch (e) {
-    console.error('Click failed:', e);
   }
 }
 
@@ -620,7 +661,7 @@ function addKillFeed(text, type = 'info') {
 }
 
 onUnmounted(() => {
-  disconnectSSE();
+  disconnectWS();
   if (damagePopupTimeout) clearTimeout(damagePopupTimeout);
   if (levelUpTimeout) clearTimeout(levelUpTimeout);
 });

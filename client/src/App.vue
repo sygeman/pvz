@@ -492,6 +492,7 @@ function connectWS() {
 }
 
 function handleEvent(data) {
+  console.log('[WS Event]', data.type, data);
   if (!data || !data.type) return;
   
   switch(data.type) {
@@ -626,7 +627,12 @@ function showLevelUpNotification() {
 }
 
 async function clickBaby() {
-  if (!baby.value || !playerId.value || !ws) return;
+  console.log('[Click] baby:', baby.value?.currentHp, 'playerId:', playerId.value, 'ws:', ws?.readyState);
+  
+  if (!baby.value || !playerId.value || !ws) {
+    console.log('[Click] Blocked - missing data');
+    return;
+  }
   
   const now = Date.now();
   if (now - lastClickTime < CLICK_COOLDOWN_MS) {
@@ -643,11 +649,12 @@ async function clickBaby() {
   
   // Send click via WebSocket
   if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      type: 'click',
-      playerId: playerId.value
-    }));
+    const msg = { type: 'click', playerId: playerId.value };
+    console.log('[Click] Sending:', msg);
+    ws.send(JSON.stringify(msg));
     clicks.value++;
+  } else {
+    console.log('[Click] WebSocket not open, state:', ws.readyState);
   }
 }
 
